@@ -1,0 +1,7 @@
+---
+description: UI and component conventions
+globs: "**/*.{tsx,jsx,vue,css}"
+alwaysApply: false
+---
+Mevcut pattern. Küçük komponent. Bir section = bir iş.
+Mobil + desktop. Gerçek copy; lorem yok.

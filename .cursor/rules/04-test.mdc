@@ -1,0 +1,6 @@
+---
+description: Test yazımı veya test dosyası düzenlenirken kullan
+alwaysApply: false
+---
+Vitest. Davranış testi; implementation mock şişirme.
+Sadece değişen davranış. Full suite yok (istenmedikçe).

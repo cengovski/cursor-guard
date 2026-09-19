@@ -1,0 +1,8 @@
+---
+description: Cheap Pro defaults
+alwaysApply: true
+---
+En küçük patch. Diff üret, dosyayı baştan yazma.
+Ignore/build/generated okuma. İstenmeyen dosyaya dokunma.
+Dep/refactor/yeni feature yok (istenmedikçe). Belirsizse sor.
+Kısa cevap. MCP çağırma; terminal/gh/dosya yeterse onu kullan.

@@ -1,0 +1,7 @@
+---
+description: API route and server handler conventions
+globs: "**/api/**"
+alwaysApply: false
+---
+Doğrula → işle → net status/body.
+Client’a secret/stack sızdırma.
