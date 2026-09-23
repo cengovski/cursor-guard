@@ -1,10 +1,18 @@
-var URL_IDS = {
-  dex: 'urlDex',
-  gmgn: 'urlGmgn',
-  based: 'urlBased',
-  banana: 'urlBanana',
-  maestro: 'urlMaestro',
-  rick: 'urlRick',
+var REF_IDS = {
+  trt: 'refTrt',
+  tro: 'refTro',
+  axi: 'refAxi',
+  fmo: 'refFmo',
+  gm: 'refGm',
+  pdr: 'refPdr',
+  blo: 'refBlo',
+  okx: 'refOkx',
+  mae: 'refMae',
+  cov: 'refCov',
+  ban: 'refBan',
+  stb: 'refStb',
+  pho: 'refPho',
+  bnk: 'refBnk',
 };
 
 function note(message, bad) {
@@ -22,13 +30,14 @@ function readForm() {
   document.querySelectorAll('[data-tab]').forEach(function (el) {
     tabs[el.getAttribute('data-tab')] = el.checked;
   });
-  var urls = {};
-  Object.keys(URL_IDS).forEach(function (key) {
-    urls[key] = document.getElementById(URL_IDS[key]).value.trim();
+  var refs = {};
+  Object.keys(REF_IDS).forEach(function (key) {
+    refs[key] = document.getElementById(REF_IDS[key]).value.trim();
   });
   return {
     botToken: document.getElementById('botToken').value.trim(),
     chatId: document.getElementById('chatId').value.trim(),
+    gmgnApiKey: document.getElementById('gmgnApiKey').value.trim(),
     minMarketCap: document.getElementById('minMarketCap').value.trim(),
     minVolume: document.getElementById('minVolume').value.trim(),
     minInflowAbs: document.getElementById('minInflowAbs').value.trim(),
@@ -39,12 +48,12 @@ function readForm() {
     timeframe: document.getElementById('timeframe').value,
     chains: chains,
     tabs: tabs,
-    urls: urls,
+    refs: refs,
   };
 }
 
 function fillForm(settings) {
-  ['botToken', 'chatId', 'minMarketCap', 'minVolume', 'minInflowAbs', 'minPriceChange', 'minWalletRows', 'dwellSeconds', 'timeframe'].forEach(function (id) {
+  ['botToken', 'chatId', 'gmgnApiKey', 'minMarketCap', 'minVolume', 'minInflowAbs', 'minPriceChange', 'minWalletRows', 'dwellSeconds', 'timeframe'].forEach(function (id) {
     var el = document.getElementById(id);
     if (settings[id] != null) el.value = settings[id];
   });
@@ -57,9 +66,9 @@ function fillForm(settings) {
     var key = el.getAttribute('data-tab');
     el.checked = !settings.tabs || settings.tabs[key] !== false;
   });
-  var urls = settings.urls || {};
-  Object.keys(URL_IDS).forEach(function (key) {
-    if (urls[key]) document.getElementById(URL_IDS[key]).value = urls[key];
+  var refs = settings.refs || {};
+  Object.keys(REF_IDS).forEach(function (key) {
+    document.getElementById(REF_IDS[key]).value = refs[key] || '';
   });
 }
 
@@ -102,7 +111,7 @@ document.getElementById('test').addEventListener('click', function () {
     type: 'TEST_MESSAGE',
     botToken: settings.botToken,
     chatId: settings.chatId,
-    urls: settings.urls,
+    refs: settings.refs,
   }).then(function (res) {
     if (!res || !res.ok) note((res && res.error) || 'Test gönderilemedi', true);
     else note('Test mesajı gönderildi.');

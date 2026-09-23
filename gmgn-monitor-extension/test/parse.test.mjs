@@ -121,44 +121,105 @@ test('one chain pass merges tabs and the Telegram body matches the alert layout'
   same(merged[0].walletsByTab.Track.map((w) => w.name), ['NANSEN', 'NANSEN', 'NANSEN']);
   same(merged[0].walletsByTab.KOL.map((w) => w.name), ['NANSEN', 'cupsey']);
   same(merged[0].walletsByTab.Smart, []);
-  const html = api.formatTelegramHtml(merged[0], api.DEFAULT_URLS);
-  assert.match(html, /^SOLANA\n\nSMART · KOL · NANSEN TRACK\n\n\$GP\n\n<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>\n\nMC \$17\.6M  1h V \$140\.4K  \+2\.16%\n\n15d · 15K holders · 1h KOL Net Inflow \$\+2\.6K\n\n/);
+  const html = api.formatTelegramHtml(merged[0]);
+  assert.match(html, /^🟢 \$GP \| 15d\n\n💎 MC: \$17\.6M\n💵 1h: \+2\.16%\n\n📊 Vol: \$140\.4K\n👥 Holders: 15K\n\n<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>$/);
   assert.equal(html.includes('$GP GP'), false);
-  assert.equal(html.includes('BUY CLUSTER'), false);
-  assert.equal(html.includes('DexScreener'), false);
-  assert.equal(html.includes('BasedBot'), false);
-  assert.equal(html.includes('BananaGun'), false);
-  assert.equal(html.includes('Maestro'), false);
+  assert.equal(html.includes('ATH'), false);
+  assert.equal(html.includes('Audit'), false);
   assert.equal(html.includes('<a '), false);
-  assert.match(html, /NANSEN TRACK\n\nNANSEN\n\n3\/0 · \$2\.1K · \$\+1\.1K · 15d Buy More\n\nNANSEN\n\n0\/1 · \$0 · \$-1\.1K · 15d Sell All/);
-  assert.match(html, /KOL\n\nNANSEN\n\ncupsey/);
   assert.equal(html.includes('\n\n\n'), false);
-  assert.equal(html.includes('Honeypot'), false);
-  assert.equal(html.includes('GoPlus'), false);
-  assert.equal(html.includes('Diamond'), false);
-  const markup = api.buildReplyMarkup(merged[0], api.DEFAULT_URLS);
-  assert.equal(markup.inline_keyboard.length, 2);
-  same(markup.inline_keyboard[0].map((b) => b.text), ['Dex', 'GMGN', 'Based']);
-  same(markup.inline_keyboard[1].map((b) => b.text), ['Banana', 'Maestro', 'Rick']);
-  assert.equal(markup.inline_keyboard[0][0].url, 'https://dexscreener.com/solana/HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ');
-  assert.equal(markup.inline_keyboard[0][1].url, 'https://gmgn.ai/sol/token/HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ');
-  const escaped = api.formatTelegramHtml(Object.assign({}, merged[0], { symbol: 'A<B' }), api.DEFAULT_URLS);
-  assert.match(escaped, /\$A&lt;B\n\n/);
+  const escaped = api.formatTelegramHtml(Object.assign({}, merged[0], { symbol: 'A<B' }));
+  assert.match(escaped, /\$A&lt;B \| 15d/);
   assert.equal(escaped.includes('$A&lt;B A&lt;B'), false);
-  assert.equal(api.formatTelegramHtml({ chain: 'eth', symbol: 'Witch', address: '0xabc', walletsByTab: { Track: [], Smart: [], KOL: [] }, seenTabs: { Track: false, Smart: true, KOL: false } }).split('\n')[0], 'ETHEREUM');
-  assert.match(api.formatTelegramHtml({ chain: 'bsc', symbol: 'BLEE', address: '0x1', seenTabs: { Track: true, Smart: false, KOL: false }, walletsByTab: { Track: [{ name: 'FkEF...NNhf', txs: '4/0', buy: 4, sell: 0, bal: '$0', inflow: '$1', age: '6s', action: 'First Buy' }], Smart: [], KOL: [] } }), /^BSC\n\nNANSEN TRACK\n\n\$BLEE\n\n<code>0x1<\/code>/);
+  assert.match(api.formatTelegramHtml({ chain: 'bsc', symbol: 'BLEE', address: '0x1' }), /^🟢 \$BLEE\n\n<code>0x1<\/code>$/);
 });
 
-test('sample alert has one blank line between every line', () => {
-  const text = api.formatTelegramHtml(api.sampleAlert());
+test('alert keeps one blank line between sections and omits missing stats', () => {
+  const text = api.formatTelegramHtml(Object.assign({}, api.sampleAlert(), {
+    athText: '$161.5K (1.69x)',
+    priceUsd: '$0.000095',
+    liqText: '$25.7K',
+    vol24Text: '$338.9K',
+    buys1h: '2.2K',
+    sells1h: '2.1K',
+    pool: '5XGBxxxxxxxxk3pi',
+    poolQuote: '1.98 SOL',
+    devText: '9.3%',
+    socialTg: 'https://t.me/PigeonOnSol',
+    dexPaid: true,
+    lpBurned: true,
+    top10Text: '26.8%',
+  }));
   assert.equal(text.includes('\n\n\n'), false);
-  const lines = text.split('\n\n');
-  assert.equal(lines.length > 3, true);
-  lines.forEach((line) => assert.equal(line.includes('\n'), false));
-  assert.equal(lines[0], 'SOLANA');
-  assert.equal(lines[1], 'NANSEN TRACK');
-  assert.equal(lines[2], '$GP');
-  assert.match(lines[3], /^<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>$/);
+  assert.match(text, /💎 MC: \$17\.6M\n🚀 ATH: \$161\.5K \(1\.69x\)\n💵 Price: \$0\.000095 \| 1h: \+2\.16%/);
+  assert.match(text, /💧 Liq: \$25\.7K\n📊 Vol: \$338\.9K\n📈 1h: 2\.2K \/ 2\.1K\n👥 Holders: 15K/);
+  assert.match(text, /🏦 Pool: 5XGB\.\.\.k3pi \(1\.98 SOL\)\n👨‍💻 Dev: 9\.3%/);
+  assert.match(text, /🔒 LP: 🔥 Burned\n✅ DEX: ✅ Paid\n\n👥 Top 10: 26\.8%/);
+  assert.match(text, /<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>$/);
+  const bare = api.fieldsFromGmgn({
+    price: { price: '0.1', volume_24h: '1000', buys_1h: 10, sells_1h: 4 },
+    circulating_supply: '1000000',
+    liquidity: '25000',
+    holder_count: 497,
+    link: { telegram: 'https://t.me/x' },
+    stat: { top_10_holder_rate: 0.268 },
+    dev: { dexscr_ad: 0 },
+  }, { burn_status: '' }, 0);
+  assert.equal(bare.athText, undefined);
+  assert.equal(bare.auditText, undefined);
+  assert.equal(bare.dexPaid, undefined);
+  assert.equal(bare.lpBurned, undefined);
+  assert.equal(bare.top10Text, '26.8%');
+});
+
+function buttons(markup) {
+  return markup.inline_keyboard.flat();
+}
+
+test('referral urls keep a code, drop an empty code, and hide photon without a pool', () => {
+  const card = { chain: 'sol', address: 'ADDR', pool: 'POOL' };
+  const refs = {
+    trt: 'tokenscan', tro: 'tokenscan', axi: 'tokenscan', fmo: 'tokenscan', gm: 'tokenscan',
+    pdr: 'tokenscan', blo: 'tokenscan', okx: 'tokenscan', mae: 'nicodotdot', cov: 'tokenscan',
+    ban: 'tokenscan', stb: 'HKkwt0nKl', pho: 'tokenscan', bnk: '4tddu',
+  };
+  const withRef = buttons(api.buildReplyMarkup(card, refs));
+  const byText = Object.fromEntries(withRef.map((b) => [b.text, b.url]));
+  same(api.buildReplyMarkup(card, refs).inline_keyboard.map((row) => row.map((b) => b.text)), [
+    ['DEX', 'DEF', 'GT', 'MOB', 'EXP', 'Xs'],
+    ['TRT', 'TRO', 'AXI', 'FMO', 'GM', 'PDR', 'BLO'],
+    ['OKX', 'MAE', 'COV', 'BAN', 'STB', 'PHO', 'BNK'],
+  ]);
+  assert.equal(byText.DEX, 'https://dexscreener.com/solana/ADDR');
+  assert.equal(byText.MAE, 'https://t.me/MaestroSniperBot?start=ADDR-nicodotdot');
+  assert.equal(byText.STB, 'https://t.me/SolTradingBot?start=ADDR-HKkwt0nKl');
+  assert.equal(byText.BNK, 'https://t.me/mcqueen_bonkbot?start=ref_4tddu_ca_ADDR');
+  assert.equal(byText.GM, 'https://gmgn.ai/sol/token/tokenscan_ADDR');
+  assert.equal(byText.PHO, 'https://photon-sol.tinyastro.io/en/r/@tokenscan/POOL');
+  assert.equal(byText.TRT, 'https://trojan.com/terminal?token=ADDR&pool=POOL&ref=tokenscan');
+  const empty = Object.fromEntries(buttons(api.buildReplyMarkup(card, {})).map((b) => [b.text, b.url]));
+  assert.equal(empty.MAE, 'https://t.me/MaestroSniperBot?start=ADDR');
+  assert.equal(empty.STB, 'https://t.me/SolTradingBot?start=ADDR');
+  assert.equal(empty.BNK, 'https://t.me/mcqueen_bonkbot?start=ca_ADDR');
+  assert.equal(empty.GM, 'https://gmgn.ai/sol/token/ADDR');
+  assert.equal(empty.PHO, 'https://photon-sol.tinyastro.io/en/lp/POOL');
+  assert.equal(empty.TRT, 'https://trojan.com/terminal?token=ADDR&pool=POOL');
+  assert.equal(empty.FMO, 'https://fomo.family/tokens/solana/ADDR');
+  assert.equal(empty.TRO, 'https://t.me/achilles_trojanbot?start=ADDR');
+  const noPool = buttons(api.buildReplyMarkup({ chain: 'sol', address: 'ADDR' }, { pho: 'tokenscan', trt: 'tokenscan' }));
+  assert.equal(noPool.some((b) => b.text === 'PHO'), false);
+  assert.equal(noPool.some((b) => b.text === 'TRT'), false);
+  const eth = Object.fromEntries(buttons(api.buildReplyMarkup({ chain: 'eth', address: '0xabc', pool: '0xpool' }, { mae: 'nicodotdot', pho: 'tokenscan' })).map((b) => [b.text, b.url]));
+  assert.equal(eth.DEX, 'https://dexscreener.com/eth/0xabc');
+  assert.equal(eth.GT, 'https://www.geckoterminal.com/eth/tokens/0xabc');
+  assert.equal(eth.DEF, 'https://www.defined.fi/ethereum/0xabc');
+  assert.equal(eth.OKX, 'https://web3.okx.com/token/ethereum/0xabc');
+  assert.equal(eth.EXP, 'https://etherscan.io/token/0xabc');
+  assert.equal(eth.MOB, 'https://mobula.io/token/ethereum/0xabc');
+  assert.equal(eth.GM, 'https://gmgn.ai/eth/token/0xabc');
+  assert.equal(eth.MAE, undefined);
+  assert.equal(eth.PHO, undefined);
+  assert.equal(eth.BNK, undefined);
 });
 
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {

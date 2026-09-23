@@ -405,29 +405,104 @@
     return String(tpl || '')
       .replaceAll('{chain}', vars.chain || '')
       .replaceAll('{dexChain}', vars.dexChain || '')
-      .replaceAll('{address}', vars.address || '');
+      .replaceAll('{address}', vars.address || '')
+      .replaceAll('{pool}', vars.pool || '')
+      .replaceAll('{ref}', vars.ref || '');
   }
 
-  function linkVars(merged) {
-    var chain = merged.chain || '';
-    return {
-      chain: chain,
-      dexChain: DEX_CHAIN[chain] || chain,
-      address: merged.address || '',
-    };
+  var LINK_DEX = { sol: 'solana', eth: 'eth', bsc: 'bsc', base: 'base', robinhood: 'robinhood', arc: 'arc' };
+  var LINK_LONG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base', robinhood: 'robinhood', arc: 'arc' };
+  var EXPLORER = {
+    sol: 'https://solscan.io/token/',
+    bsc: 'https://bscscan.com/token/',
+    eth: 'https://etherscan.io/token/',
+    base: 'https://basescan.org/token/',
+  };
+  var MOBULA = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base' };
+  var SOL_ONLY = { TRO: 1, BLO: 1, MAE: 1, COV: 1, BAN: 1, STB: 1, PHO: 1, BNK: 1 };
+  var BUTTON_ROWS = [
+    ['DEX', 'DEF', 'GT', 'MOB', 'EXP', 'Xs'],
+    ['TRT', 'TRO', 'AXI', 'FMO', 'GM', 'PDR', 'BLO'],
+    ['OKX', 'MAE', 'COV', 'BAN', 'STB', 'PHO', 'BNK'],
+  ];
+
+  function refCode(refs, label) {
+    var v = refs && refs[String(label || '').toLowerCase()];
+    return v == null ? '' : String(v).trim();
   }
 
-  function resolveLinks(merged, templates) {
-    var urls = Object.assign({}, DEFAULT_URLS, templates || {});
-    var vars = linkVars(merged);
-    return {
-      dex: fillTemplate(urls.dex, vars),
-      gmgn: fillTemplate(urls.gmgn, vars),
-      based: fillTemplate(urls.based, vars),
-      banana: fillTemplate(urls.banana, vars),
-      maestro: fillTemplate(urls.maestro, vars),
-      rick: fillTemplate(urls.rick, vars),
-    };
+  function buttonUrl(label, card, refs) {
+    card = card || {};
+    var chain = String(card.chain || '').toLowerCase();
+    var address = String(card.address || '').trim();
+    var pool = String(card.pool || '').trim();
+    if (SOL_ONLY[label] && chain !== 'sol') return '';
+    if ((label === 'TRT' || label === 'PHO') && !pool) return '';
+    if (!address && label !== 'PHO') return '';
+    var ref = refCode(refs, label);
+    var dexChain = LINK_DEX[chain] || chain;
+    var longChain = LINK_LONG[chain] || chain;
+    var enc = encodeURIComponent;
+    if (label === 'DEX') return 'https://dexscreener.com/' + enc(dexChain) + '/' + enc(address);
+    if (label === 'DEF') return 'https://www.defined.fi/' + enc(longChain) + '/' + enc(address);
+    if (label === 'GT') return 'https://www.geckoterminal.com/' + enc(dexChain) + '/tokens/' + enc(address);
+    if (label === 'MOB') {
+      if (!MOBULA[chain]) return '';
+      return 'https://mobula.io/token/' + enc(MOBULA[chain]) + '/' + enc(address);
+    }
+    if (label === 'EXP') return EXPLORER[chain] ? EXPLORER[chain] + enc(address) : '';
+    if (label === 'Xs') return 'https://x.com/search?q=' + enc(address);
+    if (label === 'TRT') {
+      var q = 'token=' + enc(address) + '&pool=' + enc(pool);
+      if (ref) q += '&ref=' + enc(ref);
+      return 'https://trojan.com/terminal?' + q;
+    }
+    if (label === 'TRO') {
+      return 'https://t.me/achilles_trojanbot?start=' + enc(ref ? 'r-' + ref + '-' + address : address);
+    }
+    if (label === 'AXI') {
+      return ref ? 'https://axiom.trade/t/' + enc(address) + '/@' + enc(ref) : 'https://axiom.trade/t/' + enc(address);
+    }
+    if (label === 'FMO') {
+      var fmo = 'https://fomo.family/tokens/solana/' + enc(address);
+      return ref ? fmo + '?r=' + enc(ref) + '&source=share_link' : fmo;
+    }
+    if (label === 'GM') {
+      var gm = 'https://gmgn.ai/' + enc(chain) + '/token/';
+      return ref ? gm + enc(ref) + '_' + enc(address) : gm + enc(address);
+    }
+    if (label === 'PDR') {
+      var padre = 'https://trade.padre.gg/trade/solana/' + enc(address);
+      return ref ? padre + '?rk=' + enc(ref) : padre;
+    }
+    if (label === 'BLO') {
+      return 'https://t.me/BloomSolana_bot?start=' + enc(ref ? 'ref_' + ref + '_ca_' + address : address);
+    }
+    if (label === 'OKX') {
+      var okx = 'https://web3.okx.com/token/' + enc(longChain) + '/' + enc(address);
+      return ref ? okx + '?ref=' + enc(ref) : okx;
+    }
+    if (label === 'MAE') {
+      return 'https://t.me/MaestroSniperBot?start=' + enc(ref ? address + '-' + ref : address);
+    }
+    if (label === 'COV') {
+      return 'https://t.me/cove_trading_bot?start=' + enc(ref ? 'ref_' + ref + '-' + address : address);
+    }
+    if (label === 'BAN') {
+      return 'https://t.me/BananaGun_bot?start=' + enc(ref ? 'snp_' + ref + '_' + address : 'snp_' + address);
+    }
+    if (label === 'STB') {
+      return 'https://t.me/SolTradingBot?start=' + enc(ref ? address + '-' + ref : address);
+    }
+    if (label === 'PHO') {
+      return ref
+        ? 'https://photon-sol.tinyastro.io/en/r/@' + enc(ref) + '/' + enc(pool)
+        : 'https://photon-sol.tinyastro.io/en/lp/' + enc(pool);
+    }
+    if (label === 'BNK') {
+      return 'https://t.me/mcqueen_bonkbot?start=' + enc(ref ? 'ref_' + ref + '_ca_' + address : 'ca_' + address);
+    }
+    return '';
   }
 
   function esc(s) {
@@ -481,42 +556,205 @@
     return lines;
   }
 
-  function formatTelegramHtml(merged) {
-    var lines = [];
-    lines.push(networkLabel(merged.chain));
-    var source = [];
-    var walletLinesAll = [];
-    SOURCE_TABS.forEach(function (pair) {
-      var wallets = (merged.walletsByTab && merged.walletsByTab[pair[1]]) || [];
-      var seen = merged.seenTabs && merged.seenTabs[pair[1]];
-      if (seen || wallets.length) source.push(pair[0]);
-      if (!wallets.length) return;
-      var ordered = wallets.slice().sort(function (a, b) {
-        return (isBuyWallet(a) ? 0 : 1) - (isBuyWallet(b) ? 0 : 1);
-      });
-      walletLinesAll.push(pair[0]);
-      ordered.forEach(function (w) {
-        walletLines(w).forEach(function (line) { walletLinesAll.push(line); });
-      });
-    });
-    if (source.length) lines.push(source.join(' · '));
-    lines.push('$' + esc(merged.symbol || ''));
-    lines.push('<code>' + esc(merged.address || '') + '</code>');
-    var stats = [];
-    if (merged.mcText) stats.push('MC ' + esc(merged.mcText));
-    var volLabel = merged.volumeLabel || (merged.timeframe ? merged.timeframe + ' V' : '');
-    if (volLabel || merged.volumeText) stats.push(esc((volLabel + ' ' + (merged.volumeText || '')).trim()));
-    if (merged.changeText) stats.push(esc(merged.changeText));
-    if (stats.length) lines.push(stats.join('  '));
-    var meta = [];
-    if (merged.age) meta.push(esc(merged.age));
-    if (merged.holders) meta.push(esc(merged.holders) + ' holders');
-    if (merged.inflowLabel || merged.inflowText) {
-      meta.push(esc(((merged.inflowLabel || '') + ' ' + (merged.inflowText || '')).trim()));
+  function shortAddr(addr) {
+    var s = String(addr || '');
+    if (s.length <= 10) return s;
+    return s.slice(0, 4) + '...' + s.slice(-4);
+  }
+
+  function trimNum(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return '';
+    var abs = Math.abs(v);
+    var digits = abs >= 100 ? 1 : abs >= 1 ? 2 : 4;
+    if (abs > 0 && abs < 0.01) digits = 6;
+    return v.toFixed(digits).replace(/\.?0+$/, '');
+  }
+
+  function formatUsd(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return '';
+    var abs = Math.abs(v);
+    var num = abs;
+    var suf = '';
+    if (abs >= 1e9) { num = abs / 1e9; suf = 'B'; }
+    else if (abs >= 1e6) { num = abs / 1e6; suf = 'M'; }
+    else if (abs >= 1e3) { num = abs / 1e3; suf = 'K'; }
+    var body = suf ? trimNum(num) + suf : trimNum(abs);
+    return (v < 0 ? '-$' : '$') + body;
+  }
+
+  function formatCount(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return '';
+    var abs = Math.abs(v);
+    if (abs >= 1e9) return trimNum(v / 1e9) + 'B';
+    if (abs >= 1e6) return trimNum(v / 1e6) + 'M';
+    if (abs >= 1e3) return trimNum(v / 1e3) + 'K';
+    return trimNum(v);
+  }
+
+  function formatRatio(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return '';
+    if (Math.abs(v) <= 1) v *= 100;
+    return trimNum(v) + '%';
+  }
+
+  function formatSignedPct(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return '';
+    return (v > 0 ? '+' : '') + trimNum(v) + '%';
+  }
+
+  function ageFromTs(ts, now) {
+    var sec = Math.floor(Number(now) / 1000 - Number(ts));
+    if (!isFinite(sec) || sec < 0) return '';
+    if (sec < 60) return sec + 's';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h';
+    return Math.floor(sec / 86400) + 'd';
+  }
+
+  function asNum(v) {
+    if (v == null || v === '') return null;
+    var n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function fieldsFromGmgn(info, security, now) {
+    var out = {};
+    if (!info || typeof info !== 'object') return out;
+    if (info.token && typeof info.token === 'object') info = info.token;
+    var price = info.price && typeof info.price === 'object' ? info.price : null;
+    var pool = info.pool && typeof info.pool === 'object' ? info.pool : null;
+    var dev = info.dev && typeof info.dev === 'object' ? info.dev : null;
+    var link = info.link && typeof info.link === 'object' ? info.link : (info.social_links && typeof info.social_links === 'object' ? info.social_links : null);
+    var stat = info.stat && typeof info.stat === 'object' ? info.stat : null;
+    security = security && typeof security === 'object' ? security : null;
+    var priceUsd = asNum(price ? price.price : (typeof info.price === 'object' ? null : info.price));
+    var supply = asNum(info.circulating_supply != null ? info.circulating_supply : info.total_supply);
+    var mc = asNum(info.market_cap != null ? info.market_cap : info.usd_market_cap);
+    if (mc == null && priceUsd != null && supply != null) mc = priceUsd * supply;
+    if (mc != null) out.mcText = formatUsd(mc);
+    var athPrice = asNum(info.ath_price);
+    var athMc = asNum(info.ath_market_cap);
+    if (athMc == null && athPrice != null && supply != null) athMc = athPrice * supply;
+    if (athMc != null) {
+      var mult = mc ? athMc / mc : (athPrice != null && priceUsd ? athPrice / priceUsd : null);
+      out.athText = formatUsd(athMc) + (mult && isFinite(mult) ? ' (' + trimNum(mult) + 'x)' : '');
     }
-    if (meta.length) lines.push(meta.join(' · '));
-    walletLinesAll.forEach(function (line) { lines.push(line); });
-    return lines.filter(function (line) { return line != null && String(line) !== ''; }).join('\n\n');
+    if (priceUsd != null) out.priceUsd = formatUsd(priceUsd);
+    var price1h = asNum(price ? price.price_1h : info.price_1h);
+    var change = null;
+    if (priceUsd != null && price1h) change = ((priceUsd - price1h) / price1h) * 100;
+    else change = asNum(info.price_change_percent1h != null ? info.price_change_percent1h : info.price_change_percent);
+    if (change != null) {
+      out.changeText = formatSignedPct(change);
+      out.changeWindow = '1h';
+    }
+    var liq = asNum(pool && pool.liquidity != null ? pool.liquidity : info.liquidity);
+    if (liq != null) out.liqText = formatUsd(liq);
+    var vol = asNum(price ? price.volume_24h : info.volume_24h);
+    if (vol != null) out.vol24Text = formatUsd(vol);
+    var buys = asNum(price ? price.buys_1h : info.buys_1h);
+    var sells = asNum(price ? price.sells_1h : info.sells_1h);
+    if (buys != null) out.buys1h = formatCount(buys);
+    if (sells != null) out.sells1h = formatCount(sells);
+    var holders = asNum(info.holder_count != null ? info.holder_count : (stat && stat.holder_count));
+    if (holders != null) out.holders = formatCount(holders);
+    var poolAddr = (pool && pool.pool_address) || info.biggest_pool_address || info.pool_address || '';
+    if (poolAddr) out.pool = String(poolAddr);
+    var quote = asNum(pool ? pool.quote_reserve : info.quote_reserve);
+    var quoteSym = (pool && pool.quote_symbol) || info.quote_symbol || '';
+    if (quote != null && quoteSym) out.poolQuote = trimNum(quote) + ' ' + quoteSym;
+    var devRate = asNum(stat && stat.creator_hold_rate != null ? stat.creator_hold_rate : (security && security.creator_balance_rate != null ? security.creator_balance_rate : info.creator_balance_rate));
+    if (devRate != null) out.devText = formatRatio(devRate);
+    if (link) {
+      if (link.telegram) out.socialTg = String(link.telegram);
+      if (link.website) out.socialWeb = String(link.website);
+      var handle = link.twitter_username || link.twitter || '';
+      if (handle) {
+        handle = String(handle);
+        out.socialX = /^https?:/i.test(handle) ? handle : 'https://x.com/' + handle.replace(/^@/, '');
+      }
+    }
+    var top = asNum(stat && stat.top_10_holder_rate != null ? stat.top_10_holder_rate : (security && security.top_10_holder_rate != null ? security.top_10_holder_rate : info.top_10_holder_rate));
+    if (top != null) out.top10Text = formatRatio(top);
+    if (dev && [dev.dexscr_ad, dev.dexscr_update_link, dev.dexscr_boost_fee, dev.dexscr_trending_bar].some(function (v) {
+      return v === 1 || v === '1' || v === true;
+    })) out.dexPaid = true;
+    if (security && /burn/i.test(String(security.burn_status || ''))) out.lpBurned = true;
+    var audit = security && (security.audit_score != null && security.audit_score !== '' ? security.audit_score : null);
+    if (audit != null && asNum(audit) != null) out.auditText = String(audit);
+    var created = asNum(info.creation_timestamp || info.open_timestamp);
+    if (created && now) out.age = ageFromTs(created, now);
+    return out;
+  }
+
+  function applyDetail(card, detail) {
+    var next = Object.assign({}, card || {});
+    if (!detail) return next;
+    Object.keys(detail).forEach(function (k) {
+      if (detail[k] == null || detail[k] === '') return;
+      if ((k === 'age' || k === 'holders' || k === 'mcText' || k === 'changeText') && next[k]) return;
+      next[k] = detail[k];
+    });
+    return next;
+  }
+
+  function formatTelegramHtml(card) {
+    card = card || {};
+    var sections = [];
+    var symbol = String(card.symbol || '').replace(/^\$/, '');
+    if (symbol || card.age) {
+      var header = '🟢 $' + esc(symbol);
+      if (card.age) header += ' | ' + esc(card.age);
+      sections.push(header);
+    }
+    var market = [];
+    if (card.mcText) market.push('💎 MC: ' + esc(card.mcText));
+    if (card.athText) market.push('🚀 ATH: ' + esc(card.athText));
+    var priceBits = [];
+    if (card.priceUsd) priceBits.push('Price: ' + esc(card.priceUsd));
+    if (card.changeText) {
+      var win = card.changeWindow || card.timeframe || '';
+      priceBits.push((win ? esc(win) + ': ' : '') + esc(card.changeText));
+    }
+    if (priceBits.length) market.push('💵 ' + priceBits.join(' | '));
+    if (market.length) sections.push(market.join('\n'));
+    var flow = [];
+    if (card.liqText) flow.push('💧 Liq: ' + esc(card.liqText));
+    var vol = card.vol24Text || card.volumeText;
+    if (vol) flow.push('📊 Vol: ' + esc(vol));
+    if (card.buys1h || card.sells1h) flow.push('📈 1h: ' + esc(card.buys1h || '0') + ' / ' + esc(card.sells1h || '0'));
+    if (card.holders) flow.push('👥 Holders: ' + esc(card.holders));
+    if (flow.length) sections.push(flow.join('\n'));
+    var who = [];
+    if (card.pool) {
+      var poolLine = '🏦 Pool: ' + esc(shortAddr(card.pool));
+      if (card.poolQuote) poolLine += ' (' + esc(card.poolQuote) + ')';
+      who.push(poolLine);
+    }
+    if (card.devText) who.push('👨‍💻 Dev: ' + esc(card.devText));
+    if (who.length) sections.push(who.join('\n'));
+    var social = [];
+    if (card.socialTg) social.push('💬 TG: ' + esc(card.socialTg));
+    if (card.socialWeb) social.push('🌐 Web: ' + esc(card.socialWeb));
+    if (card.socialX) social.push('🐦 X: ' + esc(card.socialX));
+    if (social.length) sections.push(social.join('\n'));
+    var safety = [];
+    if (card.auditText) safety.push('🛡 Audit: ' + esc(card.auditText));
+    if (card.lpBurned) safety.push('🔒 LP: 🔥 Burned');
+    if (card.dexPaid) safety.push('✅ DEX: ✅ Paid');
+    if (safety.length) sections.push(safety.join('\n'));
+    if (card.top10Text) {
+      var top = '👥 Top 10: ' + esc(card.top10Text);
+      if (card.top10CleanText) top += ' | 🟢 ' + esc(card.top10CleanText);
+      sections.push(top);
+    }
+    if (card.address) sections.push('<code>' + esc(card.address) + '</code>');
+    return sections.join('\n\n');
   }
 
   var CG_PLATFORM = {
@@ -550,22 +788,14 @@
     return false;
   }
 
-  function buildReplyMarkup(merged, templates) {
-    var links = resolveLinks(merged, templates);
-    return {
-      inline_keyboard: [
-        [
-          { text: 'Dex', url: links.dex },
-          { text: 'GMGN', url: links.gmgn },
-          { text: 'Based', url: links.based },
-        ],
-        [
-          { text: 'Banana', url: links.banana },
-          { text: 'Maestro', url: links.maestro },
-          { text: 'Rick', url: links.rick },
-        ],
-      ],
-    };
+  function buildReplyMarkup(card, refs) {
+    var keyboard = BUTTON_ROWS.map(function (row) {
+      return row.map(function (label) {
+        var url = buttonUrl(label, card, refs);
+        return url ? { text: label, url: url } : null;
+      }).filter(Boolean);
+    }).filter(function (row) { return row.length; });
+    return { inline_keyboard: keyboard };
   }
 
   function sampleAlert() {
@@ -607,6 +837,9 @@
     fillTemplate: fillTemplate,
     formatTelegramHtml: formatTelegramHtml,
     buildReplyMarkup: buildReplyMarkup,
+    buttonUrl: buttonUrl,
+    fieldsFromGmgn: fieldsFromGmgn,
+    applyDetail: applyDetail,
     sampleAlert: sampleAlert,
     shouldSkipToken: shouldSkipToken,
   };

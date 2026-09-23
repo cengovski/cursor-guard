@@ -54,13 +54,27 @@
         </div>
       </fieldset>
       <fieldset>
-        <legend>Bağlantılar</legend>
-        <label>Dex <input id="urlDex" type="text" /></label>
-        <label>GMGN <input id="urlGmgn" type="text" /></label>
-        <label>Based <input id="urlBased" type="text" /></label>
-        <label>Banana <input id="urlBanana" type="text" /></label>
-        <label>Maestro <input id="urlMaestro" type="text" /></label>
-        <label>Rick <input id="urlRick" type="text" /></label>
+        <legend>GMGN</legend>
+        <label>API anahtarı (isteğe bağlı) <input id="gmgnApiKey" type="password" autocomplete="off" /></label>
+        <p class="hint">Anahtar varsa istek X-APIKEY ile gider. Yoksa herkese açık çağrı denenir. İkisi de olmazsa uyarı karttaki alanlarla gider.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Yönlendirme kodları</legend>
+        <p class="hint">Her düğmenin kodu ayrıdır. Boş bırakılırsa ref parametresi eklenmez.</p>
+        <label>TRT Trojan <input id="refTrt" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>TRO Achilles <input id="refTro" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>AXI Axiom <input id="refAxi" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>FMO Fomo <input id="refFmo" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>GM GMGN <input id="refGm" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>PDR Padre <input id="refPdr" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>BLO Bloom <input id="refBlo" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>OKX <input id="refOkx" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>MAE Maestro <input id="refMae" type="text" autocomplete="off" placeholder="nicodotdot" /></label>
+        <label>COV Cove <input id="refCov" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>BAN Banana <input id="refBan" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>STB SolTradingBot <input id="refStb" type="text" autocomplete="off" placeholder="HKkwt0nKl" /></label>
+        <label>PHO Photon <input id="refPho" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>BNK Bonk <input id="refBnk" type="text" autocomplete="off" placeholder="4tddu" /></label>
       </fieldset>
       <div class="row">
         <button id="save" type="submit">Kaydet</button>

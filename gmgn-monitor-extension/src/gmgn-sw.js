@@ -19,7 +19,11 @@ var DEFAULT_SETTINGS = {
   timeframe: '1h',
   chains: { sol: true, bsc: true, robinhood: true, base: true, eth: true, arc: true },
   tabs: { Track: true, Smart: true, KOL: true },
-  urls: Object.assign({}, GmgnParse.DEFAULT_URLS),
+  gmgnApiKey: '',
+  refs: {
+    trt: '', tro: '', axi: '', fmo: '', gm: '', pdr: '', blo: '',
+    okx: '', mae: '', cov: '', ban: '', stb: '', pho: '', bnk: '',
+  },
 };
 
 var ports = new Map();
@@ -30,9 +34,10 @@ function enqueue(fn) {
   return queue;
 }
 
-function safeError(err, token) {
+function safeError(err, token, apiKey) {
   var msg = String((err && err.message) || err || 'Hata');
   if (token && String(token).length > 4) msg = msg.split(token).join('***');
+  if (apiKey && String(apiKey).length > 4) msg = msg.split(apiKey).join('***');
   msg = msg.replace(/bot\d{6,}:[A-Za-z0-9_-]+/g, 'bot***');
   return msg.slice(0, 400);
 }
@@ -54,7 +59,8 @@ function normalizeSettings(raw) {
   var s = Object.assign({}, DEFAULT_SETTINGS, raw || {});
   s.chains = Object.assign({}, DEFAULT_SETTINGS.chains, (raw && raw.chains) || {});
   s.tabs = Object.assign({}, DEFAULT_SETTINGS.tabs, (raw && raw.tabs) || {});
-  s.urls = Object.assign({}, DEFAULT_SETTINGS.urls, (raw && raw.urls) || {});
+  s.refs = Object.assign({}, DEFAULT_SETTINGS.refs, (raw && raw.refs) || {});
+  s.gmgnApiKey = String(s.gmgnApiKey || '').trim();
   s.positiveInflowOnly = !!s.positiveInflowOnly;
   var tf = String(s.timeframe || '1h');
   if (['1m', '5m', '15m', '1h', '6h', '24h'].indexOf(tf) === -1) tf = '1h';
@@ -300,6 +306,57 @@ async function fetchRwaPlatforms() {
   return platforms;
 }
 
+function gmgnClientId() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    var r = Math.random() * 16 | 0;
+    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+async function gmgnGet(url, headers, signal) {
+  var res = await fetch(url, { signal: signal, headers: headers });
+  if (!res.ok) throw new Error('GMGN ' + res.status);
+  var json = await res.json();
+  if (json && json.code != null && Number(json.code) !== 0) throw new Error('GMGN ' + (json.message || json.code));
+  return json && json.data != null ? json.data : json;
+}
+
+async function fetchGmgnDetail(chain, address, apiKey) {
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, 4000);
+  var signal = ctrl.signal;
+  async function openApi(path) {
+    var url = 'https://gmgn.ai' + path
+      + '?chain=' + encodeURIComponent(chain)
+      + '&address=' + encodeURIComponent(address)
+      + '&timestamp=' + Math.floor(Date.now() / 1000)
+      + '&client_id=' + gmgnClientId();
+    return gmgnGet(url, { 'X-APIKEY': apiKey, Accept: 'application/json' }, signal);
+  }
+  async function publicInfo() {
+    var url = 'https://gmgn.ai/defi/quotation/v1/tokens/' + encodeURIComponent(chain) + '/' + encodeURIComponent(address);
+    return gmgnGet(url, { Accept: 'application/json' }, signal);
+  }
+  try {
+    var info = null;
+    var security = null;
+    if (apiKey) {
+      try {
+        info = await openApi('/v1/token/info');
+        try { security = await openApi('/v1/token/security'); } catch (e) { security = null; }
+      } catch (e) {
+        info = await publicInfo();
+      }
+    } else {
+      info = await publicInfo();
+    }
+    return GmgnParse.fieldsFromGmgn(info, security, Date.now());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function getRwaIndex() {
   var data = await chrome.storage.local.get('rwaIndex');
   var cached = data.rwaIndex;
@@ -343,15 +400,18 @@ async function onChainDone(msg) {
     }
     if (!settings.botToken || !settings.chatId) continue;
     try {
-      var html = GmgnParse.formatTelegramHtml(item, settings.urls);
-      var markup = GmgnParse.buildReplyMarkup(item, settings.urls);
+      var detail = null;
+      try { detail = await fetchGmgnDetail(item.chain, item.address, settings.gmgnApiKey); } catch (err) { detail = null; }
+      var view = GmgnParse.applyDetail(item, detail);
+      var html = GmgnParse.formatTelegramHtml(view);
+      var markup = GmgnParse.buildReplyMarkup(view, settings.refs);
       await sendTelegram(settings.botToken, settings.chatId, html, markup);
       local.seen[key] = true;
       local.alertsSent += 1;
       session.error = '';
       await chrome.storage.local.set({ seen: local.seen, alertsSent: local.alertsSent });
     } catch (e) {
-      session.error = safeError(e, settings.botToken);
+      session.error = safeError(e, settings.botToken, settings.gmgnApiKey);
     }
   }
   var next = GmgnParse.nextChain(session.chain, settings.chains);
@@ -441,14 +501,14 @@ async function testMessage(body) {
   var settings = await getSettings();
   var token = (body && body.botToken) || settings.botToken;
   var chatId = (body && body.chatId) || settings.chatId;
-  var urls = (body && body.urls) || settings.urls;
+  var refs = (body && body.refs) || settings.refs;
   if (!token || !chatId) return { ok: false, error: MISSING_TG };
   try {
     var sample = GmgnParse.sampleAlert();
-    await sendTelegram(token, chatId, GmgnParse.formatTelegramHtml(sample, urls), GmgnParse.buildReplyMarkup(sample, urls));
+    await sendTelegram(token, chatId, GmgnParse.formatTelegramHtml(sample), GmgnParse.buildReplyMarkup(sample, refs));
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: safeError(e, token) };
+    return { ok: false, error: safeError(e, token, settings.gmgnApiKey) };
   }
 }
 
