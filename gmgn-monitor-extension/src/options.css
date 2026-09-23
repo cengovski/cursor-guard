@@ -1,0 +1,43 @@
+body {
+  margin: 0;
+  background: #111;
+  color: #eee;
+  font: 14px/1.45 system-ui, sans-serif;
+}
+main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+.hint { color: #aaa; }
+fieldset {
+  border: 1px solid #333;
+  border-radius: 8px;
+  margin: 16px 0;
+  padding: 12px;
+}
+legend { padding: 0 6px; }
+label { display: block; margin: 8px 0; }
+input[type="text"], input[type="password"], input[type="number"], select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #444;
+  background: #1c1c1c;
+  color: #fff;
+}
+.check { display: flex; gap: 8px; align-items: center; }
+.check input { width: auto; }
+.group { margin-top: 10px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: #2f6fed;
+  color: white;
+  cursor: pointer;
+}
+#reset, #test { background: #3a3a3a; }
+#note { min-height: 1.2em; color: #9d9; }
+#note.bad { color: #f88; }
