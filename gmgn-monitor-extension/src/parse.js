@@ -226,6 +226,7 @@
     var inflowCount = '';
     var inflowLabel = '';
     var inflowText = '';
+    var tags = [];
 
     for (var i = 0; i < tokens.length; i++) {
       var t = tokens[i];
@@ -263,13 +264,22 @@
       }
       if (!holders && /^\d+(?:\.\d+)?[KMB]$/i.test(t)) {
         holders = t;
+        continue;
       }
+      if (t.length <= 40 && /[A-Za-z]/.test(t) && t.toLowerCase() !== symbol.toLowerCase()) tags.push(t);
     }
 
     var wallets = walletRoot ? walletsFromTokens(collectTexts(walletRoot, null)) : [];
 
+    var name = '';
+    for (var n = 0; n < tags.length; n++) {
+      if (/\s/.test(tags[n])) { name = tags[n]; break; }
+    }
+
     return {
       symbol: symbol,
+      name: name,
+      tags: tags,
       address: address,
       age: age,
       holders: holders,
@@ -349,6 +359,8 @@
           chain: s.chain || '',
           address: s.address,
           symbol: s.symbol || '',
+          name: s.name || '',
+          tags: [],
           age: s.age || '',
           holders: s.holders || '',
           volumeLabel: s.volumeLabel || '',
@@ -364,8 +376,11 @@
         });
       }
       var row = map.get(key);
-      ['symbol', 'age', 'holders', 'volumeLabel', 'volumeText', 'mcText', 'changeText', 'timeframe'].forEach(function (k) {
+      ['symbol', 'name', 'age', 'holders', 'volumeLabel', 'volumeText', 'mcText', 'changeText', 'timeframe'].forEach(function (k) {
         if (!row[k] && s[k]) row[k] = s[k];
+      });
+      (s.tags || []).forEach(function (tag) {
+        if (tag && row.tags.indexOf(tag) === -1) row.tags.push(tag);
       });
       if (s.inflowText) {
         var abs = s.inflowUsd == null ? 0 : Math.abs(s.inflowUsd);
@@ -449,9 +464,10 @@
     return true;
   }
 
-  function walletBlock(w) {
-    if (typeof w === 'string') return esc(w);
-    var lines = [esc(w.name || '')];
+  function walletLines(w) {
+    if (typeof w === 'string') return [esc(w)];
+    var lines = [];
+    if (w.name) lines.push(esc(w.name));
     var bits = [];
     if (w.txs) bits.push(w.txs);
     if (w.bal) bits.push(w.bal);
@@ -462,14 +478,14 @@
     var stat = bits.join(' · ');
     if (tail.length) stat = stat ? stat + ' · ' + tail.join(' ') : tail.join(' ');
     if (stat) lines.push(esc(stat));
-    return lines.join('\n');
+    return lines;
   }
 
   function formatTelegramHtml(merged) {
     var lines = [];
     lines.push(networkLabel(merged.chain));
     var source = [];
-    var sections = [];
+    var walletLinesAll = [];
     SOURCE_TABS.forEach(function (pair) {
       var wallets = (merged.walletsByTab && merged.walletsByTab[pair[1]]) || [];
       var seen = merged.seenTabs && merged.seenTabs[pair[1]];
@@ -478,12 +494,14 @@
       var ordered = wallets.slice().sort(function (a, b) {
         return (isBuyWallet(a) ? 0 : 1) - (isBuyWallet(b) ? 0 : 1);
       });
-      sections.push(pair[0] + '\n' + ordered.map(walletBlock).join('\n\n'));
+      walletLinesAll.push(pair[0]);
+      ordered.forEach(function (w) {
+        walletLines(w).forEach(function (line) { walletLinesAll.push(line); });
+      });
     });
     if (source.length) lines.push(source.join(' · '));
     lines.push('$' + esc(merged.symbol || ''));
     lines.push('<code>' + esc(merged.address || '') + '</code>');
-    lines.push('');
     var stats = [];
     if (merged.mcText) stats.push('MC ' + esc(merged.mcText));
     var volLabel = merged.volumeLabel || (merged.timeframe ? merged.timeframe + ' V' : '');
@@ -497,11 +515,39 @@
       meta.push(esc(((merged.inflowLabel || '') + ' ' + (merged.inflowText || '')).trim()));
     }
     if (meta.length) lines.push(meta.join(' · '));
-    if (sections.length) {
-      lines.push('');
-      lines.push(sections.join('\n\n'));
+    walletLinesAll.forEach(function (line) { lines.push(line); });
+    return lines.filter(function (line) { return line != null && String(line) !== ''; }).join('\n\n');
+  }
+
+  var CG_PLATFORM = {
+    sol: 'solana',
+    eth: 'ethereum',
+    bsc: 'binance-smart-chain',
+    base: 'base',
+  };
+  var ISSUER_RE = /\b(?:xstocks?|prestocks?|ondo|backed|dinari|swarm)\b/i;
+  var BADGE_RE = /\b(?:rwa|stocks?)\b/i;
+
+  function skipAddress(chain, address) {
+    var addr = String(address || '').trim();
+    if (chain !== 'sol' && chain !== 'solana') addr = addr.toLowerCase();
+    return addr;
+  }
+
+  function shouldSkipToken(card, index) {
+    card = card || {};
+    var chain = String(card.chain || '').toLowerCase();
+    var platform = CG_PLATFORM[chain] || '';
+    var addr = skipAddress(chain, card.address);
+    var book = index && platform && index[platform];
+    if (book && addr && book[addr]) return true;
+    var blob = [card.name, card.symbol].concat(card.tags || []).join('\n');
+    if (ISSUER_RE.test(blob)) return true;
+    var tags = [card.name].concat(card.tags || []);
+    for (var i = 0; i < tags.length; i++) {
+      if (BADGE_RE.test(String(tags[i] || ''))) return true;
     }
-    return lines.join('\n');
+    return false;
   }
 
   function buildReplyMarkup(merged, templates) {
@@ -562,5 +608,6 @@
     formatTelegramHtml: formatTelegramHtml,
     buildReplyMarkup: buildReplyMarkup,
     sampleAlert: sampleAlert,
+    shouldSkipToken: shouldSkipToken,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

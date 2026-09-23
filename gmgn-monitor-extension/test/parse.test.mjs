@@ -122,7 +122,7 @@ test('one chain pass merges tabs and the Telegram body matches the alert layout'
   same(merged[0].walletsByTab.KOL.map((w) => w.name), ['NANSEN', 'cupsey']);
   same(merged[0].walletsByTab.Smart, []);
   const html = api.formatTelegramHtml(merged[0], api.DEFAULT_URLS);
-  assert.match(html, /^SOLANA\nSMART · KOL · NANSEN TRACK\n\$GP\n<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>\n\nMC \$17\.6M  1h V \$140\.4K  \+2\.16%\n15d · 15K holders · 1h KOL Net Inflow \$\+2\.6K\n/);
+  assert.match(html, /^SOLANA\n\nSMART · KOL · NANSEN TRACK\n\n\$GP\n\n<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>\n\nMC \$17\.6M  1h V \$140\.4K  \+2\.16%\n\n15d · 15K holders · 1h KOL Net Inflow \$\+2\.6K\n\n/);
   assert.equal(html.includes('$GP GP'), false);
   assert.equal(html.includes('BUY CLUSTER'), false);
   assert.equal(html.includes('DexScreener'), false);
@@ -130,8 +130,9 @@ test('one chain pass merges tabs and the Telegram body matches the alert layout'
   assert.equal(html.includes('BananaGun'), false);
   assert.equal(html.includes('Maestro'), false);
   assert.equal(html.includes('<a '), false);
-  assert.match(html, /NANSEN TRACK\nNANSEN\n3\/0 · \$2\.1K · \$\+1\.1K · 15d Buy More\n\nNANSEN\n0\/1 · \$0 · \$-1\.1K · 15d Sell All/);
-  assert.match(html, /KOL\nNANSEN\n\ncupsey/);
+  assert.match(html, /NANSEN TRACK\n\nNANSEN\n\n3\/0 · \$2\.1K · \$\+1\.1K · 15d Buy More\n\nNANSEN\n\n0\/1 · \$0 · \$-1\.1K · 15d Sell All/);
+  assert.match(html, /KOL\n\nNANSEN\n\ncupsey/);
+  assert.equal(html.includes('\n\n\n'), false);
   assert.equal(html.includes('Honeypot'), false);
   assert.equal(html.includes('GoPlus'), false);
   assert.equal(html.includes('Diamond'), false);
@@ -142,8 +143,38 @@ test('one chain pass merges tabs and the Telegram body matches the alert layout'
   assert.equal(markup.inline_keyboard[0][0].url, 'https://dexscreener.com/solana/HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ');
   assert.equal(markup.inline_keyboard[0][1].url, 'https://gmgn.ai/sol/token/HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ');
   const escaped = api.formatTelegramHtml(Object.assign({}, merged[0], { symbol: 'A<B' }), api.DEFAULT_URLS);
-  assert.match(escaped, /\$A&lt;B\n/);
+  assert.match(escaped, /\$A&lt;B\n\n/);
   assert.equal(escaped.includes('$A&lt;B A&lt;B'), false);
   assert.equal(api.formatTelegramHtml({ chain: 'eth', symbol: 'Witch', address: '0xabc', walletsByTab: { Track: [], Smart: [], KOL: [] }, seenTabs: { Track: false, Smart: true, KOL: false } }).split('\n')[0], 'ETHEREUM');
-  assert.match(api.formatTelegramHtml({ chain: 'bsc', symbol: 'BLEE', address: '0x1', seenTabs: { Track: true, Smart: false, KOL: false }, walletsByTab: { Track: [{ name: 'FkEF...NNhf', txs: '4/0', buy: 4, sell: 0, bal: '$0', inflow: '$1', age: '6s', action: 'First Buy' }], Smart: [], KOL: [] } }), /^BSC\nNANSEN TRACK\n\$BLEE\n<code>0x1<\/code>/);
+  assert.match(api.formatTelegramHtml({ chain: 'bsc', symbol: 'BLEE', address: '0x1', seenTabs: { Track: true, Smart: false, KOL: false }, walletsByTab: { Track: [{ name: 'FkEF...NNhf', txs: '4/0', buy: 4, sell: 0, bal: '$0', inflow: '$1', age: '6s', action: 'First Buy' }], Smart: [], KOL: [] } }), /^BSC\n\nNANSEN TRACK\n\n\$BLEE\n\n<code>0x1<\/code>/);
+});
+
+test('sample alert has one blank line between every line', () => {
+  const text = api.formatTelegramHtml(api.sampleAlert());
+  assert.equal(text.includes('\n\n\n'), false);
+  const lines = text.split('\n\n');
+  assert.equal(lines.length > 3, true);
+  lines.forEach((line) => assert.equal(line.includes('\n'), false));
+  assert.equal(lines[0], 'SOLANA');
+  assert.equal(lines[1], 'NANSEN TRACK');
+  assert.equal(lines[2], '$GP');
+  assert.match(lines[3], /^<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>$/);
+});
+
+test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {
+  const listed = { solana: { XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3: true }, ethereum: { '0xabc': true }, 'binance-smart-chain': {}, base: {} };
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3', symbol: 'AAPL' }, listed), true);
+  assert.equal(api.shouldSkipToken({ chain: 'eth', address: '0xABC', symbol: 'MEME' }, listed), true);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'NotListed111', symbol: 'AAPL' }, listed), false);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'NotListed111', symbol: 'TSLA' }, {}), false);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'NotListed111', symbol: 'AAPLx', name: 'Apple xStock' }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'NotListed111', symbol: 'NVDA', tags: ['PreStock'] }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'bsc', address: '0x1', symbol: 'OO', name: 'Ondo Finance' }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'base', address: '0x1', symbol: 'bCSPX', tags: ['Backed'] }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'eth', address: '0x1', symbol: 'DIN', tags: ['Dinari'] }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: '0x1', symbol: 'SWM', name: 'Swarm Markets' }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: '0x1', symbol: 'PEPE', tags: ['RWA'] }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: '0x1', symbol: 'PEPE', tags: ['Stock'] }, {}), true);
+  assert.equal(api.shouldSkipToken({ chain: 'sol', address: '0x1', symbol: 'STOCK', tags: [] }, {}), false);
+  assert.equal(api.shouldSkipToken(card, {}), false);
 });

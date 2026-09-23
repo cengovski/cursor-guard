@@ -6,7 +6,8 @@
   "permissions": ["storage", "alarms", "tabs"],
   "host_permissions": [
     "https://api.telegram.org/*",
-    "https://gmgn.ai/*"
+    "https://gmgn.ai/*",
+    "https://api.coingecko.com/*"
   ],
   "background": {
     "service_worker": "src/gmgn-sw.js"

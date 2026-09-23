@@ -243,30 +243,115 @@ async function sendTelegram(token, chatId, text, replyMarkup) {
   return data;
 }
 
+var RWA_TTL_MS = 6 * 60 * 60 * 1000;
+var RWA_CATEGORIES = ['tokenized-stock', 'real-world-assets-rwa'];
+var RWA_PLATFORMS = ['solana', 'ethereum', 'binance-smart-chain', 'base'];
+var rwaRefresh = null;
+
+function emptyRwaPlatforms() {
+  return { solana: {}, ethereum: {}, 'binance-smart-chain': {}, base: {} };
+}
+
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function fetchJson(url) {
+  var res = await fetch(url);
+  if (!res.ok) throw new Error('CoinGecko ' + res.status);
+  return res.json();
+}
+
+async function fetchCategoryIds(slug) {
+  var ids = [];
+  for (var page = 1; page <= 8; page++) {
+    if (page > 1) await sleep(1200);
+    var url = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category='
+      + encodeURIComponent(slug) + '&per_page=250&page=' + page;
+    var rows = await fetchJson(url);
+    if (!Array.isArray(rows) || !rows.length) break;
+    rows.forEach(function (row) { if (row && row.id) ids.push(row.id); });
+    if (rows.length < 250) break;
+  }
+  return ids;
+}
+
+async function fetchRwaPlatforms() {
+  var idSet = {};
+  for (var i = 0; i < RWA_CATEGORIES.length; i++) {
+    if (i) await sleep(1200);
+    var ids = await fetchCategoryIds(RWA_CATEGORIES[i]);
+    ids.forEach(function (id) { idSet[id] = true; });
+  }
+  await sleep(1200);
+  var list = await fetchJson('https://api.coingecko.com/api/v3/coins/list?include_platform=true');
+  var platforms = emptyRwaPlatforms();
+  (Array.isArray(list) ? list : []).forEach(function (coin) {
+    if (!coin || !idSet[coin.id] || !coin.platforms) return;
+    RWA_PLATFORMS.forEach(function (platform) {
+      var raw = coin.platforms[platform];
+      if (!raw) return;
+      var addr = String(raw).trim();
+      if (!addr) return;
+      if (platform !== 'solana') addr = addr.toLowerCase();
+      platforms[platform][addr] = true;
+    });
+  });
+  return platforms;
+}
+
+async function getRwaIndex() {
+  var data = await chrome.storage.local.get('rwaIndex');
+  var cached = data.rwaIndex;
+  var platforms = cached && cached.platforms;
+  var fresh = platforms && cached.fetchedAt && (Date.now() - cached.fetchedAt) < RWA_TTL_MS;
+  if (fresh) return platforms;
+  if (!rwaRefresh) {
+    rwaRefresh = fetchRwaPlatforms().then(function (next) {
+      return chrome.storage.local.set({ rwaIndex: { fetchedAt: Date.now(), platforms: next } }).then(function () {
+        return next;
+      });
+    }).catch(function () {
+      var fallback = platforms || emptyRwaPlatforms();
+      return chrome.storage.local.set({ rwaIndex: { fetchedAt: Date.now(), platforms: fallback } }).then(function () {
+        return fallback;
+      });
+    }).finally(function () { rwaRefresh = null; });
+  }
+  return rwaRefresh;
+}
+
 async function onChainDone(msg) {
   var session = await getSession();
   if (!session.running || msg.scanId !== session.scanId) return;
   var settings = await getSettings();
   var local = await getLocal();
   var merged = GmgnParse.mergeByAddress((session.pending || []).map(function (row) { return row.card; }));
+  var rwaIndex = emptyRwaPlatforms();
+  try { rwaIndex = await getRwaIndex(); } catch (e) { rwaIndex = emptyRwaPlatforms(); }
   if (!settings.botToken || !settings.chatId) {
     if (merged.length) session.error = MISSING_TG;
-  } else {
-    for (var i = 0; i < merged.length; i++) {
-      var item = merged[i];
-      var key = item.chain + ':' + item.address;
-      if (local.seen[key]) continue;
-      try {
-        var html = GmgnParse.formatTelegramHtml(item, settings.urls);
-        var markup = GmgnParse.buildReplyMarkup(item, settings.urls);
-        await sendTelegram(settings.botToken, settings.chatId, html, markup);
-        local.seen[key] = true;
-        local.alertsSent += 1;
-        session.error = '';
-        await chrome.storage.local.set({ seen: local.seen, alertsSent: local.alertsSent });
-      } catch (e) {
-        session.error = safeError(e, settings.botToken);
-      }
+  }
+  for (var i = 0; i < merged.length; i++) {
+    var item = merged[i];
+    var key = item.chain + ':' + item.address;
+    if (local.seen[key]) continue;
+    if (GmgnParse.shouldSkipToken(item, rwaIndex)) {
+      local.seen[key] = 'skip';
+      await chrome.storage.local.set({ seen: local.seen });
+      continue;
+    }
+    if (!settings.botToken || !settings.chatId) continue;
+    try {
+      var html = GmgnParse.formatTelegramHtml(item, settings.urls);
+      var markup = GmgnParse.buildReplyMarkup(item, settings.urls);
+      await sendTelegram(settings.botToken, settings.chatId, html, markup);
+      local.seen[key] = true;
+      local.alertsSent += 1;
+      session.error = '';
+      await chrome.storage.local.set({ seen: local.seen, alertsSent: local.alertsSent });
+    } catch (e) {
+      session.error = safeError(e, settings.botToken);
     }
   }
   var next = GmgnParse.nextChain(session.chain, settings.chains);
