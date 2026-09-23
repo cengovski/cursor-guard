@@ -188,17 +188,17 @@ test('referral urls keep a code, drop an empty code, and hide photon without a p
   const withRef = buttons(api.buildReplyMarkup(card, refs));
   const byText = Object.fromEntries(withRef.map((b) => [b.text, b.url]));
   same(api.buildReplyMarkup(card, refs).inline_keyboard.map((row) => row.map((b) => b.text)), [
-    ['GMGN'],
-    ['🤖 BASED'],
+    ['🤖 GMGN'],
+    ['🤖 BBT'],
     ['🛠 DEX', '🛠 DEF', '🛠 GT', '🛠 MOB', '🛠 EXP', '🛠 Xs'],
-    ['🤖 TRT', '🤖 TRO', '🤖 AXI', '🤖 FMO', '🤖 PDR', '🤖 BLO', '🤖 BBT'],
+    ['🤖 TRT', '🤖 TRO', '🤖 AXI', '🤖 FMO', '🤖 PDR', '🤖 BLO', '🤖 BTG'],
     ['🤖 OKX', '🤖 MAE', '🤖 COV', '🤖 BAN', '🤖 STB', '🤖 PHO', '🤖 BNK'],
   ]);
   assert.equal(byText['🛠 DEX'], 'https://dexscreener.com/solana/ADDR');
   assert.equal(byText['🤖 MAE'], 'https://t.me/MaestroSniperBot?start=ADDR-nicodotdot');
   assert.equal(byText['🤖 STB'], 'https://t.me/SolTradingBot?start=ADDR-HKkwt0nKl');
   assert.equal(byText['🤖 BNK'], 'https://t.me/mcqueen_bonkbot?start=ref_4tddu_ca_ADDR');
-  assert.equal(byText.GMGN, 'https://gmgn.ai/sol/token/tokenscan_ADDR');
+  assert.equal(byText['🤖 GMGN'], 'https://gmgn.ai/sol/token/tokenscan_ADDR');
   assert.equal(byText['🤖 PHO'], 'https://photon-sol.tinyastro.io/en/r/@tokenscan/POOL');
   assert.equal(byText['🤖 TRT'], 'https://trojan.com/terminal?token=ADDR&pool=POOL&ref=tokenscan');
   assert.equal(byText['🤖 AXI'], 'https://axiom.trade/t/ADDR/@tokenscan?chain=sol');
@@ -208,7 +208,7 @@ test('referral urls keep a code, drop an empty code, and hide photon without a p
   assert.equal(empty['🤖 MAE'], 'https://t.me/MaestroSniperBot?start=ADDR');
   assert.equal(empty['🤖 STB'], 'https://t.me/SolTradingBot?start=ADDR');
   assert.equal(empty['🤖 BNK'], 'https://t.me/mcqueen_bonkbot?start=ca_ADDR');
-  assert.equal(empty.GMGN, 'https://gmgn.ai/sol/token/ADDR');
+  assert.equal(empty['🤖 GMGN'], 'https://gmgn.ai/sol/token/ADDR');
   assert.equal(empty['🤖 PHO'], 'https://photon-sol.tinyastro.io/en/lp/POOL');
   assert.equal(empty['🤖 TRT'], 'https://trojan.com/terminal?token=ADDR&pool=POOL');
   assert.equal(empty['🤖 FMO'], 'https://fomo.family/tokens/solana/ADDR');
@@ -225,7 +225,7 @@ test('referral urls keep a code, drop an empty code, and hide photon without a p
   assert.equal(eth['🤖 OKX'], 'https://web3.okx.com/token/ethereum/0xabc');
   assert.equal(eth['🛠 EXP'], 'https://etherscan.io/token/0xabc');
   assert.equal(eth['🛠 MOB'], 'https://mobula.io/token/ethereum/0xabc');
-  assert.equal(eth.GMGN, 'https://gmgn.ai/eth/token/0xabc');
+  assert.equal(eth['🤖 GMGN'], 'https://gmgn.ai/eth/token/0xabc');
   assert.equal(eth['🤖 MAE'], undefined);
   assert.equal(eth['🤖 PHO'], undefined);
   assert.equal(eth['🤖 BNK'], undefined);
@@ -256,11 +256,29 @@ test('base axiom fomo and padre links follow the token chain', () => {
 test('based bot urls keep the gmgn chain slug and omit an empty ref', () => {
   const arc = Object.fromEntries(buttons(api.buildReplyMarkup({ chain: 'arc', address: '0xarc' }, { bbt: 'babad', btg: 'babad' })).map((b) => [b.text, b.url]));
   assert.equal(arc['🤖 BBT'], 'https://basedbot.app/r/babad/token/arc/0xarc');
-  assert.equal(arc['🤖 BASED'], 'https://t.me/based_eth_bot?start=r_babad');
+  assert.equal(arc['🤖 BTG'], 'https://t.me/based_eth_bot?start=r_babad');
   const base = Object.fromEntries(buttons(api.buildReplyMarkup({ chain: 'base', address: '0xbase' }, {})).map((b) => [b.text, b.url]));
   assert.equal(base['🤖 BBT'], 'https://basedbot.app/token/base/0xbase');
-  assert.equal(base['🤖 BASED'], 'https://t.me/based_eth_bot');
-  assert.equal(base['🤖 BASED'].includes('0xbase'), false);
+  assert.equal(base['🤖 BTG'], 'https://t.me/based_eth_bot');
+  assert.equal(base['🤖 BTG'].includes('0xbase'), false);
+});
+
+test('based terminal and telegram refs stay on their own buttons', () => {
+  const rows = api.buildReplyMarkup({ chain: 'arc', address: '0xarc' }, { bbt: 'termref', btg: 'tgref', gm: 'gmref' }).inline_keyboard;
+  same(rows.slice(0, 2).map((row) => row.map((b) => b.text)), [
+    ['🤖 GMGN'],
+    ['🤖 BBT'],
+  ]);
+  assert.equal(rows[0].length, 1);
+  assert.equal(rows[1].length, 1);
+  const byText = Object.fromEntries(rows.flat().map((b) => [b.text, b.url]));
+  assert.equal(byText['🤖 BBT'], 'https://basedbot.app/r/termref/token/arc/0xarc');
+  assert.equal(byText['🤖 BTG'], 'https://t.me/based_eth_bot?start=r_tgref');
+  assert.equal(byText['🤖 BBT'].includes('tgref'), false);
+  assert.equal(byText['🤖 BTG'].includes('termref'), false);
+  assert.equal(byText['🤖 GMGN'], 'https://gmgn.ai/arc/token/gmref_0xarc');
+  const btgRow = rows.find((row) => row.some((b) => b.text === '🤖 BTG'));
+  assert.equal(btgRow.length > 1, true);
 });
 
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {

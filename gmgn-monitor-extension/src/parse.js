@@ -429,14 +429,14 @@
   var SOL_ONLY = { TRT: 1, TRO: 1, BLO: 1, MAE: 1, COV: 1, BAN: 1, STB: 1, PHO: 1, BNK: 1 };
   var BUTTON_ROWS = [
     ['GM'],
-    ['BTG'],
+    ['BBT'],
     ['DEX', 'DEF', 'GT', 'MOB', 'EXP', 'Xs'],
-    ['TRT', 'TRO', 'AXI', 'FMO', 'PDR', 'BLO', 'BBT'],
+    ['TRT', 'TRO', 'AXI', 'FMO', 'PDR', 'BLO', 'BTG'],
     ['OKX', 'MAE', 'COV', 'BAN', 'STB', 'PHO', 'BNK'],
   ];
   var BUTTON_TEXT = {
-    GM: 'GMGN',
-    BTG: '🤖 BASED',
+    GM: '🤖 GMGN',
+    BTG: '🤖 BTG',
     DEX: '🛠 DEX',
     DEF: '🛠 DEF',
     GT: '🛠 GT',
