@@ -118,6 +118,36 @@ document.getElementById('test').addEventListener('click', function () {
   });
 });
 
-chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then(function (res) {
+document.getElementById('pickDir').addEventListener('click', function () {
+  if (typeof showDirectoryPicker !== 'function') {
+    note('Bu Chrome sürümü klasör seçemiyor.', true);
+    return;
+  }
+  showDirectoryPicker({ mode: 'readwrite', id: 'gmgn-monitor-data' }).then(function (dir) {
+    return GmgnPersist.rememberDir(dir).then(function () {
+      return chrome.runtime.sendMessage({ type: 'SYNC_FILE' });
+    });
+  }).then(function (res) {
+    if (!res || !res.ok) {
+      note((res && res.error) || 'Klasör kaydedilemedi', true);
+      return;
+    }
+    if (res.settings) fillForm(res.settings);
+    note(res.restored ? 'Veri dosyasından yüklendi.' : 'Veri klasörü seçildi.');
+  }).catch(function (err) {
+    if (err && err.name === 'AbortError') return;
+    note('Klasör seçilemedi.', true);
+  });
+});
+
+function applySettings(res) {
   if (res && res.settings) fillForm(res.settings);
+}
+
+chrome.runtime.sendMessage({ type: 'SYNC_FILE' }).then(function (res) {
+  applySettings(res);
+  if (res && res.restored) note('Veri dosyasından yüklendi.');
+  if (!res || !res.settings) return chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then(applySettings);
+}).catch(function () {
+  chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then(applySettings);
 });

@@ -3,6 +3,11 @@ try {
 } catch (e) {
   importScripts('src/parse.js');
 }
+try {
+  importScripts('persist.js');
+} catch (e) {
+  importScripts('src/persist.js');
+}
 
 var MISSING_TG = 'Telegram ayarları eksik: bot token veya sohbet ID boş. Havuzlanıyor, mesaj gönderilmiyor.';
 
@@ -42,17 +47,55 @@ function safeError(err, token, apiKey) {
   return msg.slice(0, 400);
 }
 
-function emptySession() {
-  return { running: false, chain: 'sol', tab: '', tabId: null, scanId: 0, error: '', pending: [] };
+function emptyCursor() {
+  return { running: false, chain: 'sol', tab: '', scanId: 0, error: '', pending: [] };
+}
+
+async function getLock() {
+  var data = await chrome.storage.session.get('lock');
+  var lock = data.lock || {};
+  return { held: !!lock.held, tabId: lock.tabId != null ? lock.tabId : null };
+}
+
+async function saveLock(lock) {
+  await chrome.storage.session.set({
+    lock: { held: !!lock.held, tabId: lock.tabId != null ? lock.tabId : null },
+  });
+}
+
+async function getCursor() {
+  var data = await chrome.storage.local.get('cursor');
+  var cursor = Object.assign(emptyCursor(), data.cursor || {});
+  if (!Array.isArray(cursor.pending)) cursor.pending = [];
+  return cursor;
 }
 
 async function getSession() {
-  var data = await chrome.storage.session.get('state');
-  return Object.assign(emptySession(), data.state || {});
+  var cursor = await getCursor();
+  var lock = await getLock();
+  return {
+    running: !!cursor.running && !!lock.held,
+    chain: cursor.chain || 'sol',
+    tab: cursor.tab || '',
+    tabId: lock.tabId,
+    scanId: cursor.scanId || 0,
+    error: cursor.error || '',
+    pending: cursor.pending,
+  };
 }
 
 async function saveSession(state) {
-  await chrome.storage.session.set({ state: state });
+  await saveLocal({
+    cursor: {
+      running: !!state.running,
+      chain: state.chain || 'sol',
+      tab: state.tab || '',
+      scanId: state.scanId || 0,
+      error: state.error || '',
+      pending: Array.isArray(state.pending) ? state.pending : [],
+    },
+  });
+  await saveLock({ held: !!state.running, tabId: state.tabId != null ? state.tabId : null });
 }
 
 function normalizeSettings(raw) {
@@ -76,12 +119,122 @@ async function getSettings() {
 }
 
 async function getLocal() {
-  var data = await chrome.storage.local.get(['pool', 'seen', 'alertsSent']);
+  var data = await chrome.storage.local.get(['pool', 'seen', 'alertsSent', 'alertLog']);
   return {
     pool: Array.isArray(data.pool) ? data.pool : [],
     seen: data.seen && typeof data.seen === 'object' ? data.seen : {},
     alertsSent: Number(data.alertsSent) || 0,
+    alertLog: Array.isArray(data.alertLog) ? data.alertLog : [],
   };
+}
+
+var mirrorTimer = null;
+var lastRestored = false;
+
+async function saveLocal(partial) {
+  partial.savedAt = Date.now();
+  await chrome.storage.local.set(partial);
+  scheduleMirror();
+}
+
+function scheduleMirror() {
+  if (mirrorTimer) clearTimeout(mirrorTimer);
+  mirrorTimer = setTimeout(function () {
+    mirrorTimer = null;
+    enqueue(function () { return flushMirror(); });
+  }, 400);
+}
+
+async function readBlob() {
+  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'alertLog', 'rwaIndex', 'cursor', 'savedAt']);
+  var cursor = Object.assign(emptyCursor(), data.cursor || {});
+  if (!Array.isArray(cursor.pending)) cursor.pending = [];
+  return {
+    savedAt: Number(data.savedAt) || 0,
+    settings: data.settings || null,
+    pool: Array.isArray(data.pool) ? data.pool : [],
+    seen: data.seen && typeof data.seen === 'object' ? data.seen : {},
+    alertsSent: Number(data.alertsSent) || 0,
+    alertLog: Array.isArray(data.alertLog) ? data.alertLog : [],
+    rwaIndex: data.rwaIndex || null,
+    cursor: cursor,
+  };
+}
+
+async function writeBlob(blob) {
+  var cursor = Object.assign(emptyCursor(), blob.cursor || {});
+  if (!Array.isArray(cursor.pending)) cursor.pending = [];
+  await chrome.storage.local.set({
+    savedAt: Number(blob.savedAt) || Date.now(),
+    settings: blob.settings || null,
+    pool: Array.isArray(blob.pool) ? blob.pool : [],
+    seen: blob.seen && typeof blob.seen === 'object' ? blob.seen : {},
+    alertsSent: Number(blob.alertsSent) || 0,
+    alertLog: Array.isArray(blob.alertLog) ? blob.alertLog : [],
+    rwaIndex: blob.rwaIndex || null,
+    cursor: cursor,
+  });
+}
+
+async function flushMirror() {
+  try {
+    var blob = await readBlob();
+    if (GmgnPersist.localEmpty(blob)) return;
+    await GmgnPersist.writeDataFile(blob);
+  } catch (e) { /* klasör yok */ }
+}
+
+async function syncWithFile() {
+  lastRestored = false;
+  var local = await readBlob();
+  var file = null;
+  try { file = await GmgnPersist.readDataFile(); } catch (e) { file = null; }
+  if (GmgnPersist.shouldRestore(local, file)) {
+    await writeBlob(file);
+    lastRestored = true;
+    return;
+  }
+  if (GmgnPersist.localEmpty(local)) return;
+  var fileAt = file ? (Number(file.savedAt) || 0) : -1;
+  if (!file || (Number(local.savedAt) || 0) > fileAt) {
+    if (!local.savedAt) {
+      local.savedAt = Date.now();
+      await chrome.storage.local.set({ savedAt: local.savedAt });
+    }
+    try { await GmgnPersist.writeDataFile(await readBlob()); } catch (e) { /* klasör yok */ }
+  }
+}
+
+async function migrateSessionCursor() {
+  var data = await chrome.storage.session.get('state');
+  var old = data.state;
+  if (!old) return;
+  var cursor = await getCursor();
+  var fresh = !cursor.running && !cursor.scanId && !(cursor.pending && cursor.pending.length);
+  if (fresh) {
+    await saveLocal({
+      cursor: {
+        running: !!old.running,
+        chain: old.chain || 'sol',
+        tab: old.tab || '',
+        scanId: old.scanId || 0,
+        error: old.error || '',
+        pending: Array.isArray(old.pending) ? old.pending : [],
+      },
+    });
+    await saveLock({ held: !!old.running, tabId: old.tabId != null ? old.tabId : null });
+  }
+  await chrome.storage.session.remove('state');
+}
+
+async function resumeIfUnlocked() {
+  var cursor = await getCursor();
+  if (!cursor.running) return;
+  var lock = await getLock();
+  if (lock.held) return;
+  await saveLock({ held: true, tabId: null });
+  ensureAlarm();
+  await openOrFocus(await getSession());
 }
 
 function filtersFrom(settings) {
@@ -226,7 +379,7 @@ async function onTabResult(msg) {
   });
   if (stamped.length) {
     local.pool = local.pool.concat(stamped);
-    await chrome.storage.local.set({ pool: local.pool });
+    await saveLocal({ pool: local.pool });
     session.pending = (session.pending || []).concat(stamped);
     await saveSession(session);
   }
@@ -365,12 +518,12 @@ async function getRwaIndex() {
   if (fresh) return platforms;
   if (!rwaRefresh) {
     rwaRefresh = fetchRwaPlatforms().then(function (next) {
-      return chrome.storage.local.set({ rwaIndex: { fetchedAt: Date.now(), platforms: next } }).then(function () {
+      return saveLocal({ rwaIndex: { fetchedAt: Date.now(), platforms: next } }).then(function () {
         return next;
       });
     }).catch(function () {
       var fallback = platforms || emptyRwaPlatforms();
-      return chrome.storage.local.set({ rwaIndex: { fetchedAt: Date.now(), platforms: fallback } }).then(function () {
+      return saveLocal({ rwaIndex: { fetchedAt: Date.now(), platforms: fallback } }).then(function () {
         return fallback;
       });
     }).finally(function () { rwaRefresh = null; });
@@ -395,7 +548,7 @@ async function onChainDone(msg) {
     if (local.seen[key]) continue;
     if (GmgnParse.shouldSkipToken(item, rwaIndex)) {
       local.seen[key] = 'skip';
-      await chrome.storage.local.set({ seen: local.seen });
+      await saveLocal({ seen: local.seen });
       continue;
     }
     if (!settings.botToken || !settings.chatId) continue;
@@ -408,8 +561,14 @@ async function onChainDone(msg) {
       await sendTelegram(settings.botToken, settings.chatId, html, markup);
       local.seen[key] = true;
       local.alertsSent += 1;
+      local.alertLog.push({
+        chain: item.chain,
+        address: item.address,
+        symbol: item.symbol || '',
+        at: Date.now(),
+      });
       session.error = '';
-      await chrome.storage.local.set({ seen: local.seen, alertsSent: local.alertsSent });
+      await saveLocal({ seen: local.seen, alertsSent: local.alertsSent, alertLog: local.alertLog });
     } catch (e) {
       session.error = safeError(e, settings.botToken, settings.gmgnApiKey);
     }
@@ -490,7 +649,7 @@ async function stopScan() {
 }
 
 async function resetPool() {
-  await chrome.storage.local.set({ pool: [], seen: {} });
+  await saveLocal({ pool: [], seen: {} });
   var session = await getSession();
   session.pending = [];
   await saveSession(session);
@@ -542,8 +701,12 @@ async function handleMessage(msg) {
   if (msg.type === 'GET_SETTINGS') return { ok: true, settings: await getSettings() };
   if (msg.type === 'SAVE_SETTINGS') {
     var next = normalizeSettings(msg.settings);
-    await chrome.storage.local.set({ settings: next });
+    await saveLocal({ settings: next });
     return { ok: true, settings: next };
+  }
+  if (msg.type === 'SYNC_FILE') {
+    await syncWithFile();
+    return { ok: true, restored: lastRestored, settings: await getSettings() };
   }
   if (msg.type === 'RESET_POOL') return resetPool();
   if (msg.type === 'TEST_MESSAGE') return testMessage(msg);
@@ -562,3 +725,8 @@ chrome.alarms.onAlarm.addListener(function (alarm) {
 });
 
 ensureAlarm();
+enqueue(async function () {
+  await migrateSessionCursor();
+  await syncWithFile();
+  await resumeIfUnlocked();
+});

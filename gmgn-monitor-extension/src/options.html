@@ -76,6 +76,11 @@
         <label>PHO Photon <input id="refPho" type="text" autocomplete="off" placeholder="tokenscan" /></label>
         <label>BNK Bonk <input id="refBnk" type="text" autocomplete="off" placeholder="4tddu" /></label>
       </fieldset>
+      <fieldset>
+        <legend>Veri</legend>
+        <p class="hint">Bir kez paketlenmemiş uzantı klasörünü seçin. Chrome bu klasöre kendiliğinden yazamaz. Sonra aynı klasörü kullanın ve Yenile'ye basın; yeni bir yol yüklemeyin.</p>
+        <button id="pickDir" type="button">Veri klasörünü seç</button>
+      </fieldset>
       <div class="row">
         <button id="save" type="submit">Kaydet</button>
         <button id="reset" type="button">Havuzu sıfırla</button>
@@ -84,6 +89,7 @@
     </form>
     <p id="note"></p>
   </main>
+  <script src="persist.js"></script>
   <script src="options.js"></script>
 </body>
 </html>
