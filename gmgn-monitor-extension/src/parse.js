@@ -430,9 +430,13 @@
   var BUTTON_ROWS = [
     ['GM'],
     ['BBT'],
-    ['DEX', 'DEF', 'GT', 'MOB', 'EXP', 'Xs'],
-    ['TRT', 'TRO', 'AXI', 'FMO', 'PDR', 'BLO', 'BTG'],
-    ['OKX', 'MAE', 'COV', 'BAN', 'STB', 'PHO', 'BNK'],
+    ['DEX', 'DEF', 'GT'],
+    ['MOB', 'EXP', 'Xs'],
+    ['TRO', 'AXI', 'FMO'],
+    ['PDR', 'BLO', 'OKX'],
+    ['MAE', 'COV', 'BAN'],
+    ['STB', 'PHO', 'BNK'],
+    ['TRT', 'BTG'],
   ];
   var BUTTON_TEXT = {
     GM: '🤖 GMGN',

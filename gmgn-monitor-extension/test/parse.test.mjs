@@ -190,9 +190,13 @@ test('referral urls keep a code, drop an empty code, and hide photon without a p
   same(api.buildReplyMarkup(card, refs).inline_keyboard.map((row) => row.map((b) => b.text)), [
     ['🤖 GMGN'],
     ['🤖 BBT'],
-    ['🛠 DEX', '🛠 DEF', '🛠 GT', '🛠 MOB', '🛠 EXP', '🛠 Xs'],
-    ['🤖 TRT', '🤖 TRO', '🤖 AXI', '🤖 FMO', '🤖 PDR', '🤖 BLO', '🤖 BTG'],
-    ['🤖 OKX', '🤖 MAE', '🤖 COV', '🤖 BAN', '🤖 STB', '🤖 PHO', '🤖 BNK'],
+    ['🛠 DEX', '🛠 DEF', '🛠 GT'],
+    ['🛠 MOB', '🛠 EXP', '🛠 Xs'],
+    ['🤖 TRO', '🤖 AXI', '🤖 FMO'],
+    ['🤖 PDR', '🤖 BLO', '🤖 OKX'],
+    ['🤖 MAE', '🤖 COV', '🤖 BAN'],
+    ['🤖 STB', '🤖 PHO', '🤖 BNK'],
+    ['🤖 TRT', '🤖 BTG'],
   ]);
   assert.equal(byText['🛠 DEX'], 'https://dexscreener.com/solana/ADDR');
   assert.equal(byText['🤖 MAE'], 'https://t.me/MaestroSniperBot?start=ADDR-nicodotdot');
@@ -278,7 +282,37 @@ test('based terminal and telegram refs stay on their own buttons', () => {
   assert.equal(byText['🤖 BTG'].includes('termref'), false);
   assert.equal(byText['🤖 GMGN'], 'https://gmgn.ai/arc/token/gmref_0xarc');
   const btgRow = rows.find((row) => row.some((b) => b.text === '🤖 BTG'));
-  assert.equal(btgRow.length > 1, true);
+  assert.equal(btgRow.length <= 3, true);
+  assert.equal(btgRow.some((b) => b.text === '🤖 BBT'), false);
+});
+
+test('telegram keyboard rows have at most 3 buttons', () => {
+  const sol = api.buildReplyMarkup({ chain: 'sol', address: 'ADDR', pool: 'POOL' }, {
+    gm: 'g', bbt: 'term', btg: 'tg', trt: 't', tro: 't', axi: 't', fmo: 't', pdr: 't',
+    blo: 't', okx: 't', mae: 't', cov: 't', ban: 't', stb: 't', pho: 't', bnk: 't',
+  }).inline_keyboard;
+  same(sol.map((row) => row.map((b) => b.text)), [
+    ['🤖 GMGN'],
+    ['🤖 BBT'],
+    ['🛠 DEX', '🛠 DEF', '🛠 GT'],
+    ['🛠 MOB', '🛠 EXP', '🛠 Xs'],
+    ['🤖 TRO', '🤖 AXI', '🤖 FMO'],
+    ['🤖 PDR', '🤖 BLO', '🤖 OKX'],
+    ['🤖 MAE', '🤖 COV', '🤖 BAN'],
+    ['🤖 STB', '🤖 PHO', '🤖 BNK'],
+    ['🤖 TRT', '🤖 BTG'],
+  ]);
+  const hidden = api.buildReplyMarkup({ chain: 'eth', address: '0xabc', pool: '0xpool' }, {}).inline_keyboard;
+  [sol, hidden].forEach((rows) => {
+    assert.equal(rows.length > 0, true);
+    rows.forEach((row) => {
+      assert.equal(row.length >= 1 && row.length <= 3, true, row.map((b) => b.text).join(' '));
+      assert.equal(row.every((b) => b.text && b.url), true);
+    });
+  });
+  assert.equal(hidden.some((row) => row.length > 3), false);
+  assert.equal(sol[0].map((b) => b.text).join(), '🤖 GMGN');
+  assert.equal(sol[1].map((b) => b.text).join(), '🤖 BBT');
 });
 
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {
