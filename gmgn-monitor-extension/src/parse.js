@@ -410,21 +410,54 @@
       .replaceAll('{ref}', vars.ref || '');
   }
 
-  var LINK_DEX = { sol: 'solana', eth: 'eth', bsc: 'bsc', base: 'base', robinhood: 'robinhood', arc: 'arc' };
   var LINK_LONG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base', robinhood: 'robinhood', arc: 'arc' };
+  var DEXSCREENER = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base', robinhood: 'robinhood', arc: 'arc' };
+  var GECKO = { sol: 'solana', eth: 'eth', bsc: 'bsc', base: 'base', robinhood: 'robinhood', arc: 'arc' };
+  var DEFINED = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base' };
+  var FOMO = { sol: 'solana', eth: 'ethereum', bsc: 'bnb', base: 'base', robinhood: 'robinhood', arc: 'arc' };
+  var PADRE = { sol: 'solana', eth: 'eth', bsc: 'bsc', base: 'base', robinhood: 'robinhood', arc: 'arc' };
+  var AXIOM = { sol: 'sol' };
   var EXPLORER = {
     sol: 'https://solscan.io/token/',
     bsc: 'https://bscscan.com/token/',
     eth: 'https://etherscan.io/token/',
     base: 'https://basescan.org/token/',
+    robinhood: 'https://robinhoodchain.blockscout.com/token/',
+    arc: 'https://explorer.arc.io/token/',
   };
   var MOBULA = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base' };
-  var SOL_ONLY = { TRO: 1, BLO: 1, MAE: 1, COV: 1, BAN: 1, STB: 1, PHO: 1, BNK: 1 };
+  var SOL_ONLY = { TRT: 1, TRO: 1, BLO: 1, MAE: 1, COV: 1, BAN: 1, STB: 1, PHO: 1, BNK: 1 };
   var BUTTON_ROWS = [
+    ['GM'],
+    ['BTG'],
     ['DEX', 'DEF', 'GT', 'MOB', 'EXP', 'Xs'],
-    ['TRT', 'TRO', 'AXI', 'FMO', 'GM', 'PDR', 'BLO'],
+    ['TRT', 'TRO', 'AXI', 'FMO', 'PDR', 'BLO', 'BBT'],
     ['OKX', 'MAE', 'COV', 'BAN', 'STB', 'PHO', 'BNK'],
   ];
+  var BUTTON_TEXT = {
+    GM: 'GMGN',
+    BTG: '🤖 BASED',
+    DEX: '🛠 DEX',
+    DEF: '🛠 DEF',
+    GT: '🛠 GT',
+    MOB: '🛠 MOB',
+    EXP: '🛠 EXP',
+    Xs: '🛠 Xs',
+    TRT: '🤖 TRT',
+    TRO: '🤖 TRO',
+    AXI: '🤖 AXI',
+    FMO: '🤖 FMO',
+    PDR: '🤖 PDR',
+    BLO: '🤖 BLO',
+    OKX: '🤖 OKX',
+    MAE: '🤖 MAE',
+    COV: '🤖 COV',
+    BAN: '🤖 BAN',
+    STB: '🤖 STB',
+    PHO: '🤖 PHO',
+    BNK: '🤖 BNK',
+    BBT: '🤖 BBT',
+  };
 
   function refCode(refs, label) {
     var v = refs && refs[String(label || '').toLowerCase()];
@@ -440,12 +473,20 @@
     if ((label === 'TRT' || label === 'PHO') && !pool) return '';
     if (!address && label !== 'PHO') return '';
     var ref = refCode(refs, label);
-    var dexChain = LINK_DEX[chain] || chain;
     var longChain = LINK_LONG[chain] || chain;
     var enc = encodeURIComponent;
-    if (label === 'DEX') return 'https://dexscreener.com/' + enc(dexChain) + '/' + enc(address);
-    if (label === 'DEF') return 'https://www.defined.fi/' + enc(longChain) + '/' + enc(address);
-    if (label === 'GT') return 'https://www.geckoterminal.com/' + enc(dexChain) + '/tokens/' + enc(address);
+    if (label === 'DEX') {
+      if (!DEXSCREENER[chain]) return '';
+      return 'https://dexscreener.com/' + enc(DEXSCREENER[chain]) + '/' + enc(address);
+    }
+    if (label === 'DEF') {
+      if (!DEFINED[chain]) return '';
+      return 'https://www.defined.fi/' + enc(DEFINED[chain]) + '/' + enc(address);
+    }
+    if (label === 'GT') {
+      if (!GECKO[chain]) return '';
+      return 'https://www.geckoterminal.com/' + enc(GECKO[chain]) + '/tokens/' + enc(address);
+    }
     if (label === 'MOB') {
       if (!MOBULA[chain]) return '';
       return 'https://mobula.io/token/' + enc(MOBULA[chain]) + '/' + enc(address);
@@ -461,10 +502,13 @@
       return 'https://t.me/achilles_trojanbot?start=' + enc(ref ? 'r-' + ref + '-' + address : address);
     }
     if (label === 'AXI') {
-      return ref ? 'https://axiom.trade/t/' + enc(address) + '/@' + enc(ref) : 'https://axiom.trade/t/' + enc(address);
+      if (!AXIOM[chain]) return '';
+      var axi = 'https://axiom.trade/t/' + enc(address) + '?chain=' + enc(AXIOM[chain]);
+      return ref ? 'https://axiom.trade/t/' + enc(address) + '/@' + enc(ref) + '?chain=' + enc(AXIOM[chain]) : axi;
     }
     if (label === 'FMO') {
-      var fmo = 'https://fomo.family/tokens/solana/' + enc(address);
+      if (!FOMO[chain]) return '';
+      var fmo = 'https://fomo.family/tokens/' + enc(FOMO[chain]) + '/' + enc(address);
       return ref ? fmo + '?r=' + enc(ref) + '&source=share_link' : fmo;
     }
     if (label === 'GM') {
@@ -472,7 +516,8 @@
       return ref ? gm + enc(ref) + '_' + enc(address) : gm + enc(address);
     }
     if (label === 'PDR') {
-      var padre = 'https://trade.padre.gg/trade/solana/' + enc(address);
+      if (!PADRE[chain]) return '';
+      var padre = 'https://trade.padre.gg/trade/' + enc(PADRE[chain]) + '/' + enc(address);
       return ref ? padre + '?rk=' + enc(ref) : padre;
     }
     if (label === 'BLO') {
@@ -501,6 +546,13 @@
     }
     if (label === 'BNK') {
       return 'https://t.me/mcqueen_bonkbot?start=' + enc(ref ? 'ref_' + ref + '_ca_' + address : 'ca_' + address);
+    }
+    if (label === 'BBT') {
+      var based = 'https://basedbot.app/token/' + enc(chain) + '/' + enc(address);
+      return ref ? 'https://basedbot.app/r/' + enc(ref) + '/token/' + enc(chain) + '/' + enc(address) : based;
+    }
+    if (label === 'BTG') {
+      return ref ? 'https://t.me/based_eth_bot?start=r_' + enc(ref) : 'https://t.me/based_eth_bot';
     }
     return '';
   }
@@ -800,7 +852,7 @@
     var keyboard = BUTTON_ROWS.map(function (row) {
       return row.map(function (label) {
         var url = buttonUrl(label, card, refs);
-        return url ? { text: label, url: url } : null;
+        return url ? { text: BUTTON_TEXT[label] || label, url: url } : null;
       }).filter(Boolean);
     }).filter(function (row) { return row.length; });
     return { inline_keyboard: keyboard };

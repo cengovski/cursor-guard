@@ -27,7 +27,7 @@ var DEFAULT_SETTINGS = {
   gmgnApiKey: '',
   refs: {
     trt: '', tro: '', axi: '', fmo: '', gm: '', pdr: '', blo: '',
-    okx: '', mae: '', cov: '', ban: '', stb: '', pho: '', bnk: '',
+    okx: '', mae: '', cov: '', ban: '', stb: '', pho: '', bnk: '', bbt: '', btg: '',
   },
 };
 

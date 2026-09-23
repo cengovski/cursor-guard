@@ -13,6 +13,8 @@ var REF_IDS = {
   stb: 'refStb',
   pho: 'refPho',
   bnk: 'refBnk',
+  bbt: 'refBbt',
+  btg: 'refBtg',
 };
 
 function note(message, bad) {
