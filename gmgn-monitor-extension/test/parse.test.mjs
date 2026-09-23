@@ -122,7 +122,7 @@ test('one chain pass merges tabs and the Telegram body matches the alert layout'
   same(merged[0].walletsByTab.KOL.map((w) => w.name), ['NANSEN', 'cupsey']);
   same(merged[0].walletsByTab.Smart, []);
   const html = api.formatTelegramHtml(merged[0]);
-  assert.match(html, /^🟢 \$GP \| 15d\n\n💎 MC: \$17\.6M\n💵 1h: \+2\.16%\n\n📊 Vol: \$140\.4K\n👥 Holders: 15K\n\n<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>$/);
+  assert.match(html, /^SOLANA\nKOL · NANSEN TRACK · SMART\n\n🟢 \$GP \| 15d\n\n💎 MC: \$17\.6M\n💵 1h: \+2\.16%\n\n📊 Vol: \$140\.4K\n👥 Holders: 15K\n\n<code>HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ<\/code>$/);
   assert.equal(html.includes('$GP GP'), false);
   assert.equal(html.includes('ATH'), false);
   assert.equal(html.includes('Audit'), false);
@@ -131,7 +131,9 @@ test('one chain pass merges tabs and the Telegram body matches the alert layout'
   const escaped = api.formatTelegramHtml(Object.assign({}, merged[0], { symbol: 'A<B' }));
   assert.match(escaped, /\$A&lt;B \| 15d/);
   assert.equal(escaped.includes('$A&lt;B A&lt;B'), false);
-  assert.match(api.formatTelegramHtml({ chain: 'bsc', symbol: 'BLEE', address: '0x1' }), /^🟢 \$BLEE\n\n<code>0x1<\/code>$/);
+  assert.match(api.formatTelegramHtml({ chain: 'bsc', symbol: 'BLEE', address: '0x1' }), /^BSC\n\n🟢 \$BLEE\n\n<code>0x1<\/code>$/);
+  assert.match(api.formatTelegramHtml({ chain: 'sol', symbol: 'GP', seenTabs: { KOL: true, Track: false, Smart: true } }), /^SOLANA\nKOL · SMART\n\n🟢 \$GP$/);
+  assert.match(api.formatTelegramHtml(api.sampleAlert()), /^SOLANA\nNANSEN TRACK\n\n🟢 \$GP \| 15d\n/);
 });
 
 test('alert keeps one blank line between sections and omits missing stats', () => {

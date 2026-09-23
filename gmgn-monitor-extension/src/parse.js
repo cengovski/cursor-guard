@@ -521,9 +521,9 @@
     arc: 'ARC',
   };
   var SOURCE_TABS = [
-    ['SMART', 'Smart'],
     ['KOL', 'KOL'],
     ['NANSEN TRACK', 'Track'],
+    ['SMART', 'Smart'],
   ];
 
   function networkLabel(chain) {
@@ -706,6 +706,14 @@
   function formatTelegramHtml(card) {
     card = card || {};
     var sections = [];
+    var lead = [];
+    if (card.chain) lead.push(networkLabel(card.chain));
+    var sources = [];
+    SOURCE_TABS.forEach(function (pair) {
+      if (card.seenTabs && card.seenTabs[pair[1]]) sources.push(pair[0]);
+    });
+    if (sources.length) lead.push(sources.join(' · '));
+    if (lead.length) sections.push(lead.join('\n'));
     var symbol = String(card.symbol || '').replace(/^\$/, '');
     if (symbol || card.age) {
       var header = '🟢 $' + esc(symbol);
