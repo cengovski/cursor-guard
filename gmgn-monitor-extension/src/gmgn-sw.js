@@ -778,13 +778,14 @@ async function runAthRefresh() {
   try {
     var stamp = await chrome.storage.local.get('athRefreshAt');
     var last = Number(stamp.athRefreshAt) || 0;
-    if (last && Date.now() - last < ATH_DAY_MS) return;
+    var full = !(last && Date.now() - last < ATH_DAY_MS);
     var settings = await getSettings();
     var local = await getLocal();
     var targets = [];
     var seen = {};
     local.alertLog.forEach(function (row) {
       if (!row || !(Number(row.entryMcap) > 0) || !row.address) return;
+      if (!full && Number(row.athFetchedAt) > 0) return;
       var key = row.chain + ':' + row.address;
       if (seen[key]) return;
       seen[key] = true;
@@ -799,7 +800,7 @@ async function runAthRefresh() {
       if (!(Number(ath) > 0)) continue;
       await enqueue(function () { return saveAth(row.chain, row.address, Number(ath)); });
     }
-    await enqueue(function () { return saveLocal({ athRefreshAt: Date.now() }); });
+    if (full) await enqueue(function () { return saveLocal({ athRefreshAt: Date.now() }); });
   } finally {
     athRunning = false;
   }
@@ -852,6 +853,12 @@ async function pollPnl() {
   } catch (e) { /* skip */ }
 }
 
+async function backfillSeenPnl() {
+  var local = await getLocal();
+  var next = GmgnParse.backfillPnlRecords(local.seen, local.pool, local.alertLog);
+  if (next !== local.alertLog) await saveLocal({ alertLog: next });
+}
+
 async function maybeFirstAthRefresh() {
   var stamp = await chrome.storage.local.get('athRefreshAt');
   if (Number(stamp.athRefreshAt) > 0) return;
@@ -889,6 +896,7 @@ ensureAlarm();
 enqueue(async function () {
   await migrateSessionCursor();
   await syncWithFile();
+  await backfillSeenPnl();
   await resumeIfUnlocked();
   await ensurePnlAlarms();
 }).then(function () {

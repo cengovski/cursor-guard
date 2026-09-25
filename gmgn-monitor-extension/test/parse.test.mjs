@@ -354,6 +354,34 @@ test('pnl multiple, percent, sort, and top 20 text', () => {
   assert.equal(lines[19].startsWith('20. $T1 · '), true);
 });
 
+test('backfill entry mcap from the earliest pool card for seen sends', () => {
+  const pool = [
+    { chain: 'sol', address: 'aaa', timestamp: 50, card: { mcUsd: 9000, symbol: 'LATE' } },
+    { chain: 'sol', address: 'aaa', timestamp: 10, card: { mcUsd: 1000, symbol: '$EARLY' } },
+    { chain: 'base', address: 'new', timestamp: 30, card: { mcUsd: 250000, symbol: 'NEW' } },
+    { chain: 'sol', address: 'skip', timestamp: 1, card: { mcUsd: 1, symbol: 'SKIP' } },
+  ];
+  const seen = { 'sol:aaa': true, 'base:new': true, 'sol:skip': 'skip', 'eth:gone': true };
+  const alertLog = [
+    { chain: 'sol', address: 'aaa', symbol: 'OLD', at: 1 },
+    { chain: 'sol', address: 'keep', symbol: 'KEEP', entryMcap: 50 },
+  ];
+  const next = api.backfillPnlRecords(seen, pool, alertLog);
+  assert.equal(next[0].entryMcap, 1000);
+  assert.equal(next[0].symbol, 'EARLY');
+  assert.equal(next[0].at, 1);
+  assert.equal(next[1].entryMcap, 50);
+  assert.equal(next[1].symbol, 'KEEP');
+  assert.equal(next[2].chain, 'base');
+  assert.equal(next[2].address, 'new');
+  assert.equal(next[2].symbol, 'NEW');
+  assert.equal(next[2].entryMcap, 250000);
+  assert.equal(next[2].at, 30);
+  assert.equal(next[2].sentAt, 30);
+  assert.equal(next.some((row) => row.symbol === 'SKIP' || row.address === 'gone'), false);
+  assert.equal(api.backfillPnlRecords(seen, pool, next), next);
+});
+
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {
   const listed = { solana: { XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3: true }, ethereum: { '0xabc': true }, 'binance-smart-chain': {}, base: {} };
   assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3', symbol: 'AAPL' }, listed), true);

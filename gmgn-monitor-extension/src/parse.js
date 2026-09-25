@@ -935,6 +935,61 @@
     return 'PNL · Top 20\nİlk yayındaki MC ile GMGN ATH MC\n\n' + blocks.join('\n\n');
   }
 
+  function backfillPnlRecords(seen, pool, alertLog) {
+    var earliest = {};
+    (Array.isArray(pool) ? pool : []).forEach(function (row) {
+      if (!row || !row.address || !row.card) return;
+      var key = String(row.chain || '') + ':' + String(row.address);
+      var ts = Number(row.timestamp);
+      if (!isFinite(ts)) ts = Infinity;
+      var prev = earliest[key];
+      if (!prev || ts < prev.ts) earliest[key] = { ts: ts, row: row };
+    });
+    var log = Array.isArray(alertLog) ? alertLog : [];
+    var index = {};
+    log.forEach(function (row, i) {
+      if (!row || !row.address) return;
+      var key = String(row.chain || '') + ':' + String(row.address);
+      if (index[key] == null) index[key] = i;
+    });
+    var next = null;
+    function copy() {
+      if (!next) next = log.slice();
+      return next;
+    }
+    Object.keys(seen || {}).forEach(function (key) {
+      if (seen[key] !== true) return;
+      var hit = earliest[key];
+      if (!hit) return;
+      var mc = Number(hit.row.card.mcUsd);
+      if (!(mc > 0)) return;
+      var symbol = String(hit.row.card.symbol || '').replace(/^\$/, '');
+      var idx = index[key];
+      if (idx == null) {
+        var entry = {
+          chain: hit.row.chain,
+          address: hit.row.address,
+          symbol: symbol,
+          entryMcap: mc,
+        };
+        if (hit.ts !== Infinity) {
+          entry.at = hit.row.timestamp;
+          entry.sentAt = hit.row.timestamp;
+        }
+        var created = copy();
+        index[key] = created.length;
+        created.push(entry);
+        return;
+      }
+      var existing = (next || log)[idx];
+      if (Number(existing.entryMcap) > 0) return;
+      var patched = Object.assign({}, existing, { entryMcap: mc });
+      if (symbol) patched.symbol = symbol;
+      copy()[idx] = patched;
+    });
+    return next || log;
+  }
+
   function sampleAlert() {
     return {
       chain: 'sol',
@@ -983,5 +1038,6 @@
     pnlMultiple: pnlMultiple,
     pnlPercent: pnlPercent,
     formatPnl: formatPnl,
+    backfillPnlRecords: backfillPnlRecords,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
