@@ -1,5 +1,6 @@
 (function (root) {
   var FILE_NAME = 'gmgn-monitor-data.json';
+  var PNL_FILE = 'gmgn-monitor-pnl.json';
   var IDB_NAME = 'gmgn-monitor';
   var IDB_STORE = 'fs';
 
@@ -120,13 +121,46 @@
     return true;
   }
 
+  async function readNamedFile(name) {
+    var dir = await dirHandle();
+    if (!dir || typeof dir.getFileHandle !== 'function') return { handle: false, file: null };
+    try {
+      var fh = await dir.getFileHandle(name);
+      var file = await fh.getFile();
+      var text = await file.text();
+      if (!text) return { handle: true, file: null };
+      var parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { handle: true, file: null };
+      return { handle: true, file: parsed };
+    } catch (e) {
+      return { handle: true, file: null };
+    }
+  }
+
+  function readPnlFile() {
+    return readNamedFile(PNL_FILE);
+  }
+
+  async function writePnlFile(map) {
+    var dir = await dirHandle();
+    if (!(await canWrite(dir))) return false;
+    var handle = await dir.getFileHandle(PNL_FILE, { create: true });
+    var writable = await handle.createWritable();
+    await writable.write(JSON.stringify(map && typeof map === 'object' ? map : {}));
+    await writable.close();
+    return true;
+  }
+
   root.GmgnPersist = {
     FILE_NAME: FILE_NAME,
+    PNL_FILE: PNL_FILE,
     localEmpty: localEmpty,
     shouldRestore: shouldRestore,
     rememberDir: rememberDir,
     readSavedFile: readSavedFile,
     readDataFile: readDataFile,
     writeDataFile: writeDataFile,
+    readPnlFile: readPnlFile,
+    writePnlFile: writePnlFile,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

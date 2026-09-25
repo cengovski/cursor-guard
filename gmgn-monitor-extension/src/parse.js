@@ -1017,6 +1017,117 @@
     return out;
   }
 
+  function blankPnlRecord() {
+    return { symbol: '', entryMcap: 0, athMcap: null, multiple: null, pct: null, updatedAt: 0, lastError: '' };
+  }
+
+  function copyPnlRecord(row) {
+    var rec = blankPnlRecord();
+    if (!row || typeof row !== 'object') return rec;
+    rec.symbol = String(row.symbol || '').replace(/^\$/, '');
+    rec.entryMcap = Number(row.entryMcap) > 0 ? Number(row.entryMcap) : 0;
+    rec.athMcap = Number(row.athMcap) > 0 ? Number(row.athMcap) : null;
+    rec.multiple = row.multiple != null && isFinite(Number(row.multiple)) ? Number(row.multiple) : null;
+    rec.pct = row.pct != null && isFinite(Number(row.pct)) ? Number(row.pct) : null;
+    rec.updatedAt = Number(row.updatedAt) || 0;
+    rec.lastError = String(row.lastError || '');
+    return rec;
+  }
+
+  function fillPnlMultiple(rec) {
+    var multiple = pnlMultiple(rec.entryMcap, rec.athMcap);
+    rec.multiple = multiple;
+    rec.pct = multiple == null ? null : pnlPercent(multiple);
+    return rec;
+  }
+
+  function mergePnlMap(existing, sentEntries) {
+    var map = {};
+    var src = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+    Object.keys(src).forEach(function (key) {
+      if (!key || key.indexOf(':') < 0) return;
+      var row = src[key];
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+      map[key] = copyPnlRecord(row);
+    });
+    (Array.isArray(sentEntries) ? sentEntries : []).forEach(function (row) {
+      if (!row || !row.address) return;
+      var key = String(row.chain || '') + ':' + String(row.address);
+      var prev = map[key] || blankPnlRecord();
+      var entry = Number(row.entryMcap);
+      if (entry > 0) prev.entryMcap = entry;
+      if (row.symbol) prev.symbol = String(row.symbol).replace(/^\$/, '');
+      if (Number(prev.athMcap) > 0) fillPnlMultiple(prev);
+      map[key] = prev;
+    });
+    return map;
+  }
+
+  function absorbLegacyAth(map, legacy) {
+    var next = map || {};
+    var src = legacy && typeof legacy === 'object' && !Array.isArray(legacy) ? legacy : {};
+    Object.keys(src).forEach(function (key) {
+      var row = src[key];
+      var prev = next[key];
+      if (!prev || !row || !(Number(row.athMcap) > 0) || Number(prev.athMcap) > 0) return;
+      prev.athMcap = Number(row.athMcap);
+      if (!prev.updatedAt) prev.updatedAt = Number(row.athFetchedAt) || 0;
+      fillPnlMultiple(prev);
+    });
+    return next;
+  }
+
+  function mergePnlFromSources(pnlMap, file, storage) {
+    var filePool = file && Array.isArray(file.pool) ? file.pool : [];
+    var storePool = storage && Array.isArray(storage.pool) ? storage.pool : [];
+    var sent = sentPnlEntries(unionSeen(file && file.seen, storage && storage.seen), filePool.concat(storePool));
+    var map = mergePnlMap(pnlMap, sent);
+    map = absorbLegacyAth(map, file && file.pnlAth);
+    return {
+      map: map,
+      fromFile: sentPnlEntries(file && file.seen, filePool).length,
+      sent: sent.length,
+    };
+  }
+
+  function pnlRecords(map) {
+    return Object.keys(map || {}).map(function (key) {
+      var cut = key.indexOf(':');
+      var row = map[key] || {};
+      return {
+        chain: cut < 0 ? '' : key.slice(0, cut),
+        address: cut < 0 ? key : key.slice(cut + 1),
+        symbol: row.symbol,
+        entryMcap: row.entryMcap,
+        athMcap: row.athMcap,
+        multiple: row.multiple,
+        pct: row.pct,
+        updatedAt: row.updatedAt,
+        lastError: row.lastError,
+      };
+    });
+  }
+
+  function pnlProgress(map) {
+    var keys = Object.keys(map || {});
+    var done = 0;
+    var ranked = 0;
+    var lastError = '';
+    var lastAt = 0;
+    keys.forEach(function (key) {
+      var row = map[key];
+      if (!row) return;
+      if (Number(row.updatedAt) > 0 || Number(row.athMcap) > 0 || row.lastError) done += 1;
+      if (pnlMultiple(row.entryMcap, row.athMcap) != null) ranked += 1;
+      var at = Number(row.updatedAt) || 0;
+      if (row.lastError && at >= lastAt) {
+        lastAt = at;
+        lastError = String(row.lastError);
+      }
+    });
+    return { done: done, total: keys.length, ranked: ranked, lastError: lastError };
+  }
+
   function unionSeen(fileSeen, localSeen) {
     var seen = Object.assign({}, fileSeen || {}, localSeen || {});
     Object.keys(fileSeen || {}).forEach(function (key) {
@@ -1066,8 +1177,7 @@
       pool.push(row);
     });
     next.pool = pool;
-    var ath = Object.assign({}, (file && file.pnlAth) || {}, (local && local.pnlAth) || {});
-    if (Object.keys(ath).length) next.pnlAth = ath;
+    delete next.pnlAth;
     if (!(local && Array.isArray(local.alertLog) && local.alertLog.length) && file && Array.isArray(file.alertLog)) {
       next.alertLog = file.alertLog;
     }
@@ -1175,6 +1285,11 @@
     formatPnl: formatPnl,
     backfillPnlRecords: backfillPnlRecords,
     sentPnlEntries: sentPnlEntries,
+    mergePnlMap: mergePnlMap,
+    absorbLegacyAth: absorbLegacyAth,
+    mergePnlFromSources: mergePnlFromSources,
+    pnlRecords: pnlRecords,
+    pnlProgress: pnlProgress,
     pnlStatus: pnlStatus,
     mergeDataFile: mergeDataFile,
     emptyUserGuard: emptyUserGuard,

@@ -38,6 +38,6 @@ button {
   color: white;
   cursor: pointer;
 }
-#reset, #test { background: #3a3a3a; }
-#note { min-height: 1.2em; color: #9d9; }
+#reset, #test, #pnlRefresh { background: #3a3a3a; }
+#note { min-height: 1.2em; color: #9d9; white-space: pre-wrap; }
 #note.bad { color: #f88; }

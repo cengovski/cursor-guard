@@ -146,7 +146,7 @@ function scheduleMirror() {
 }
 
 async function readBlob() {
-  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'alertLog', 'rwaIndex', 'cursor', 'savedAt', 'tgUpdateOffset', 'athRefreshAt', 'pnlPostedAt', 'pnlAth']);
+  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'alertLog', 'rwaIndex', 'cursor', 'savedAt', 'tgUpdateOffset', 'athRefreshAt', 'pnlPostedAt']);
   var cursor = Object.assign(emptyCursor(), data.cursor || {});
   if (!Array.isArray(cursor.pending)) cursor.pending = [];
   return {
@@ -161,7 +161,6 @@ async function readBlob() {
     tgUpdateOffset: data.tgUpdateOffset != null ? Number(data.tgUpdateOffset) || 0 : 0,
     athRefreshAt: Number(data.athRefreshAt) || 0,
     pnlPostedAt: Number(data.pnlPostedAt) || 0,
-    pnlAth: data.pnlAth && typeof data.pnlAth === 'object' ? data.pnlAth : {},
   };
 }
 
@@ -181,7 +180,6 @@ async function writeBlob(blob) {
   if (blob.tgUpdateOffset != null) next.tgUpdateOffset = Number(blob.tgUpdateOffset) || 0;
   if (blob.athRefreshAt != null) next.athRefreshAt = Number(blob.athRefreshAt) || 0;
   if (blob.pnlPostedAt != null) next.pnlPostedAt = Number(blob.pnlPostedAt) || 0;
-  if (blob.pnlAth && typeof blob.pnlAth === 'object') next.pnlAth = blob.pnlAth;
   await chrome.storage.local.set(next);
 }
 
@@ -190,12 +188,14 @@ async function flushMirror() {
     var blob = await readBlob();
     var saved = await GmgnPersist.readSavedFile();
     if (saved.file) blob = GmgnParse.mergeDataFile(blob, saved.file);
+    delete blob.pnlAth;
     if (GmgnPersist.localEmpty(blob)) return;
     await GmgnPersist.writeDataFile(blob);
   } catch (e) { /* klasör yok */ }
 }
 
 async function syncWithFile() {
+  try { await syncPnlFile(); } catch (e) { /* pnl dosyası sonra */ }
   lastRestored = false;
   var local = await readBlob();
   var file = null;
@@ -203,6 +203,9 @@ async function syncWithFile() {
   if (GmgnPersist.shouldRestore(local, file)) {
     await writeBlob(file);
     lastRestored = true;
+    if (file && file.pnlAth) {
+      try { await GmgnPersist.writeDataFile(GmgnParse.mergeDataFile(file, file)); } catch (e) { /* klasör yok */ }
+    }
     return;
   }
   if (GmgnPersist.localEmpty(local)) return;
@@ -712,7 +715,7 @@ chrome.runtime.onConnect.addListener(function (port) {
   });
 });
 
-var UI_ACTIONS = { START: 1, STOP: 1, SAVE_SETTINGS: 1, SYNC_FILE: 1, RESET_POOL: 1, TEST_MESSAGE: 1 };
+var UI_ACTIONS = { START: 1, STOP: 1, SAVE_SETTINGS: 1, SYNC_FILE: 1, RESET_POOL: 1, TEST_MESSAGE: 1, PNL_REFRESH: 1 };
 var userGuard = GmgnParse.emptyUserGuard();
 var uiWaitNoted = false;
 
@@ -757,13 +760,16 @@ async function handleMessage(msg) {
   }
   if (msg.type === 'RESET_POOL') return resetPool();
   if (msg.type === 'TEST_MESSAGE') return testMessage(msg);
+  if (msg.type === 'PNL_REFRESH') return refreshPnlUi();
   return { ok: false, error: 'Bilinmeyen mesaj' };
 }
 
 var PNL_DUP_MS = 5 * 60 * 1000;
 var ATH_DAY_MS = 24 * 60 * 60 * 1000;
 var athRunning = false;
-var athWaitNoted = false;
+var pnlPassOwnsFile = false;
+var athPass = { done: 0, total: 0, lastError: '' };
+var pnlLoadedLogged = -1;
 
 async function fetchAthMcap(chain, address, apiKey) {
   var ctrl = new AbortController();
@@ -792,109 +798,180 @@ async function fetchAthMcap(chain, address, apiKey) {
   }
 }
 
-async function loadPnlStatus() {
+async function appendPnlLog(line, view) {
+  var data = await chrome.storage.local.get('pnlLog');
+  var lines = Array.isArray(data.pnlLog) ? data.pnlLog.slice(-79) : [];
+  if (line) lines.push(String(line).slice(0, 300));
+  var next = { pnlLog: lines };
+  if (view) {
+    athPass = {
+      done: Number(view.done) || 0,
+      total: Number(view.total) || 0,
+      lastError: view.lastError != null ? String(view.lastError) : athPass.lastError,
+    };
+    next.pnlView = athPass;
+  }
+  await chrome.storage.local.set(next);
+}
+
+function progressText(view) {
+  var text = 'PnL ' + (Number(view && view.done) || 0) + '/' + (Number(view && view.total) || 0);
+  if (view && view.lastError) text += '\nSon hata: ' + view.lastError;
+  return text;
+}
+
+async function syncPnlFile() {
+  if (pnlPassOwnsFile) {
+    var held = await GmgnPersist.readPnlFile();
+    return { map: held.file || {}, handle: !!held.handle, fromFile: 0, sent: 0, wrote: false };
+  }
   var saved = await GmgnPersist.readSavedFile();
   var local = await getLocal();
-  var extra = await chrome.storage.local.get(['pnlAth', 'pnlWaitCount', 'pnlPostPending']);
-  var ath = Object.assign({}, extra.pnlAth && typeof extra.pnlAth === 'object' ? extra.pnlAth : {});
-  local.alertLog.forEach(function (row) {
-    if (!row || !(Number(row.athMcap) > 0) || !row.address) return;
-    var key = String(row.chain || '') + ':' + String(row.address);
-    if (ath[key]) return;
-    ath[key] = { athMcap: Number(row.athMcap), athFetchedAt: Number(row.athFetchedAt) || 0 };
-  });
-  var status = GmgnParse.pnlStatus({
-    handle: saved.handle,
-    fileRead: !!saved.file,
-    file: saved.file,
-    storage: local,
-    ath: ath,
-  });
-  status.waitCount = Number(extra.pnlWaitCount) || 0;
-  status.postPending = !!extra.pnlPostPending;
-  return status;
+  var pnl = await GmgnPersist.readPnlFile();
+  var legacy = await chrome.storage.local.get('pnlAth');
+  var merged = GmgnParse.mergePnlFromSources(pnl.file, saved.file, local);
+  merged.map = GmgnParse.absorbLegacyAth(merged.map, legacy.pnlAth);
+  merged.handle = !!(saved.handle || pnl.handle);
+  merged.wrote = false;
+  if (merged.handle) {
+    merged.wrote = await GmgnPersist.writePnlFile(merged.map);
+    if (!merged.wrote) await appendPnlLog('PnL dosyası yazılamadı');
+  }
+  var view = GmgnParse.pnlProgress(merged.map);
+  if (merged.fromFile !== pnlLoadedLogged) {
+    pnlLoadedLogged = merged.fromFile;
+    await appendPnlLog('Dosyadan ' + merged.fromFile + ' token yüklendi.', view);
+  } else await appendPnlLog('', view);
+  return merged;
 }
 
-async function saveAth(chain, address, athMcap, entryMcap) {
-  var data = await chrome.storage.local.get('pnlAth');
-  var map = Object.assign({}, data.pnlAth && typeof data.pnlAth === 'object' ? data.pnlAth : {});
-  map[String(chain || '') + ':' + String(address || '')] = {
-    athMcap: athMcap,
-    multiple: entryMcap > 0 ? athMcap / entryMcap : null,
-    athFetchedAt: Date.now(),
-  };
-  await saveLocal({ pnlAth: map });
-}
-
-async function deliverRanked(settings) {
-  var status = await loadPnlStatus();
-  if (status.kind !== 'rank') return;
-  await sendTelegram(settings.botToken, settings.chatId, status.text, null, true);
-  await saveLocal({ pnlPostedAt: Date.now(), pnlWaitCount: 0, pnlPostPending: false });
+async function postTop20(settings, keepPending) {
+  if (!settings || !settings.botToken || !settings.chatId) {
+    await appendPnlLog('Telegram post fail Telegram ayarları eksik');
+    return false;
+  }
+  var read = await GmgnPersist.readPnlFile();
+  var map = read.file || {};
+  var view = GmgnParse.pnlProgress(map);
+  if (!view.ranked) {
+    await appendPnlLog('Telegram post yok', view);
+    return false;
+  }
+  try {
+    await sendTelegram(settings.botToken, settings.chatId, GmgnParse.formatPnl(GmgnParse.pnlRecords(map)), null, true);
+    await appendPnlLog('Telegram post ok');
+    var flags = { pnlPostedAt: Date.now(), pnlWaitCount: 0 };
+    if (!keepPending) flags.pnlPostPending = false;
+    await chrome.storage.local.set(flags);
+    return true;
+  } catch (e) {
+    await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey), { done: view.done, total: view.total, lastError: safeError(e, settings.botToken, settings.gmgnApiKey) });
+    return false;
+  }
 }
 
 async function runAthRefresh() {
   if (athRunning) return;
   athRunning = true;
   try {
-    var stamp = await chrome.storage.local.get('athRefreshAt');
+    var synced = await syncPnlFile();
+    var stamp = await chrome.storage.local.get(['athRefreshAt', 'pnlPostPending']);
     var last = Number(stamp.athRefreshAt) || 0;
     var full = !(last && Date.now() - last < ATH_DAY_MS);
     var settings = await getSettings();
-    var status = await loadPnlStatus();
+    var map = synced.map;
     var targets = [];
-    var seen = {};
-    status.entries.forEach(function (row) {
-      if (!row || !(Number(row.entryMcap) > 0) || !row.address) return;
-      if (!full && Number(row.athFetchedAt) > 0) return;
-      var key = row.chain + ':' + row.address;
-      if (seen[key]) return;
-      seen[key] = true;
-      targets.push({ chain: row.chain, address: row.address, entryMcap: Number(row.entryMcap) });
+    Object.keys(map).forEach(function (key) {
+      var rec = map[key];
+      if (!rec || !(Number(rec.entryMcap) > 0)) return;
+      if (!full && Number(rec.athMcap) > 0) return;
+      var cut = key.indexOf(':');
+      targets.push({
+        key: key,
+        chain: cut < 0 ? '' : key.slice(0, cut),
+        address: cut < 0 ? key : key.slice(cut + 1),
+        symbol: rec.symbol || '',
+        entryMcap: Number(rec.entryMcap),
+      });
     });
+    if (targets.length && stamp.pnlPostPending && GmgnParse.pnlProgress(map).ranked > 0) await postTop20(settings, true);
+    if (targets.length) await appendPnlLog('', { done: 0, total: targets.length, lastError: athPass.lastError });
+    pnlPassOwnsFile = true;
     if (targets.length) {
       for (var i = 0; i < targets.length; i++) {
         if (i) await sleep(300);
         var row = targets[i];
         var ath = null;
-        try { ath = await fetchAthMcap(row.chain, row.address, settings.gmgnApiKey); } catch (e) { ath = null; }
-        if (!(Number(ath) > 0)) continue;
-        await (function (item, value) {
-          return enqueue(function () { return saveAth(item.chain, item.address, value, item.entryMcap); });
-        })(row, Number(ath));
+        var err = '';
+        try {
+          ath = await fetchAthMcap(row.chain, row.address, settings.gmgnApiKey);
+          if (!(Number(ath) > 0)) err = 'ATH yok';
+        } catch (e) {
+          err = safeError(e, settings.botToken, settings.gmgnApiKey);
+        }
+        var rec = map[row.key];
+        rec.updatedAt = Date.now();
+        if (err) rec.lastError = err;
+        else {
+          rec.lastError = '';
+          rec.athMcap = Number(ath);
+          var multiple = GmgnParse.pnlMultiple(rec.entryMcap, rec.athMcap);
+          rec.multiple = multiple;
+          rec.pct = multiple == null ? null : GmgnParse.pnlPercent(multiple);
+        }
+        var wrote = await GmgnPersist.writePnlFile(map);
+        var n = (i + 1) + '/' + targets.length;
+        var label = row.symbol || row.address;
+        if (!wrote && !err) err = 'PnL dosyası yazılamadı';
+        var view = { done: i + 1, total: targets.length, lastError: err || athPass.lastError };
+        if (err) await appendPnlLog('ATH ' + n + ' fail ' + label + ' ' + err, view);
+        else await appendPnlLog('ATH ' + n + ' ok ' + label, view);
       }
-      if (full) await enqueue(function () { return saveLocal({ athRefreshAt: Date.now() }); });
+      if (full) await chrome.storage.local.set({ athRefreshAt: Date.now() });
     }
+    pnlPassOwnsFile = false;
     var pendingNow = await chrome.storage.local.get('pnlPostPending');
-    if (pendingNow.pnlPostPending && settings.botToken && settings.chatId) await deliverRanked(settings);
+    if (pendingNow.pnlPostPending) await postTop20(settings, false);
   } finally {
+    pnlPassOwnsFile = false;
     athRunning = false;
-    athWaitNoted = false;
   }
 }
 
 async function replyPnl(settings) {
-  var status = await loadPnlStatus();
-  if (status.kind === 'no-folder') {
-    await sendTelegram(settings.botToken, settings.chatId, status.text, null, true);
-    return false;
-  }
-  if (status.kind === 'empty') {
-    await sendTelegram(settings.botToken, settings.chatId, status.text, null, true);
-    await saveLocal({ pnlPostedAt: Date.now() });
-    return false;
-  }
-  if (status.kind === 'wait') {
-    if (!status.waitCount) {
-      await sendTelegram(settings.botToken, settings.chatId, status.text, null, true);
-      await saveLocal({ pnlWaitCount: status.fromFile });
+  if (athRunning) {
+    try {
+      await sendTelegram(settings.botToken, settings.chatId, progressText(athPass), null, true);
+    } catch (e) {
+      await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey));
     }
-    await saveLocal({ pnlPostPending: true });
-    return true;
+    return false;
   }
-  await sendTelegram(settings.botToken, settings.chatId, status.text, null, true);
-  await saveLocal({ pnlPostedAt: Date.now(), pnlWaitCount: 0, pnlPostPending: false });
-  return false;
+  var synced = await syncPnlFile();
+  if (!synced.handle) {
+    try { await sendTelegram(settings.botToken, settings.chatId, 'Veri klasörü seçilmedi.', null, true); }
+    catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
+    return false;
+  }
+  if (!synced.sent) {
+    try { await sendTelegram(settings.botToken, settings.chatId, 'Henüz sıralanacak token yok.', null, true); }
+    catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
+    await chrome.storage.local.set({ pnlPostedAt: Date.now() });
+    return false;
+  }
+  if (GmgnParse.pnlProgress(synced.map).ranked > 0) {
+    await postTop20(settings, false);
+    return false;
+  }
+  var loaded = 'Dosyadan ' + synced.fromFile + ' token yüklendi.';
+  var counted = await chrome.storage.local.get('pnlWaitCount');
+  if (!Number(counted.pnlWaitCount)) {
+    try { await sendTelegram(settings.botToken, settings.chatId, loaded, null, true); }
+    catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
+    await chrome.storage.local.set({ pnlWaitCount: synced.fromFile });
+  }
+  await chrome.storage.local.set({ pnlPostPending: true });
+  return true;
 }
 
 async function postScheduledPnl() {
@@ -902,22 +979,29 @@ async function postScheduledPnl() {
   if (!settings.botToken || !settings.chatId) return false;
   var data = await chrome.storage.local.get('pnlPostedAt');
   if (Date.now() - (Number(data.pnlPostedAt) || 0) < PNL_DUP_MS) return false;
-  var status = await loadPnlStatus();
-  if (status.kind === 'rank') {
-    await sendTelegram(settings.botToken, settings.chatId, status.text, null, true);
-    await saveLocal({ pnlPostedAt: Date.now() });
+  if (athRunning) return false;
+  var synced = await syncPnlFile();
+  if (!synced.handle || !synced.sent) {
+    if (synced.handle && !synced.sent) {
+      try { await sendTelegram(settings.botToken, settings.chatId, 'Henüz sıralanacak token yok.', null, true); }
+      catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
+      await chrome.storage.local.set({ pnlPostedAt: Date.now() });
+    }
     return false;
   }
-  if (status.kind === 'empty') {
-    await sendTelegram(settings.botToken, settings.chatId, status.text, null, true);
-    await saveLocal({ pnlPostedAt: Date.now() });
+  if (GmgnParse.pnlProgress(synced.map).ranked > 0) {
+    await postTop20(settings, false);
     return false;
   }
-  if (status.kind === 'wait') {
-    await saveLocal({ pnlPostPending: true });
-    return true;
-  }
-  return false;
+  await chrome.storage.local.set({ pnlPostPending: true });
+  return true;
+}
+
+async function refreshPnlUi() {
+  if (athRunning) return { ok: true, running: true, progress: athPass };
+  await chrome.storage.local.set({ pnlPostPending: true });
+  runAthRefresh();
+  return { ok: true, running: true, progress: athPass };
 }
 
 async function pollPnl() {
@@ -937,6 +1021,7 @@ async function pollPnl() {
     var next = offset;
     var want = false;
     var notify = false;
+    var progressReply = false;
     var now = Date.now();
     var nowSec = Math.floor(now / 1000);
     for (var i = 0; i < data.result.length; i++) {
@@ -953,10 +1038,13 @@ async function pollPnl() {
       if (!(age >= 0 && age <= 120)) continue;
       var hit = { chatId: msg.chat.id, userId: msg.from && msg.from.id != null ? msg.from.id : '', address: addr };
       if (pnl && athRunning) {
-        if (!athWaitNoted) {
-          athWaitNoted = true;
-          notify = true;
+        var runningHit = GmgnParse.admitUser(userGuard, hit, now);
+        if (!runningHit.allow) {
+          if (runningHit.notice) notify = true;
+          continue;
         }
+        userGuard.busy = false;
+        progressReply = true;
         continue;
       }
       var decision = GmgnParse.admitUser(userGuard, hit, now);
@@ -972,6 +1060,10 @@ async function pollPnl() {
     }
     try {
       await saveLocal({ tgUpdateOffset: next });
+      if (progressReply && settings.botToken && settings.chatId) {
+        try { await sendTelegram(settings.botToken, settings.chatId, progressText(athPass), null, true); }
+        catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
+      }
       if (notify && settings.botToken && settings.chatId) {
         try { await sendTelegram(settings.botToken, settings.chatId, 'Bekleyin.', null, true); } catch (e) { /* one notice */ }
       }

@@ -426,9 +426,44 @@ test('pnl list comes from seen in the data file, not alertLog', () => {
   const missing = api.pnlStatus({ handle: false, fileRead: false, file: null, storage, ath: {} });
   assert.equal(missing.kind, 'no-folder');
   assert.equal(missing.text, 'Veri klasörü seçilmedi.');
-  const kept = api.mergeDataFile({ seen: {}, pool: [], alertLog: [] }, file);
+  const kept = api.mergeDataFile({ seen: {}, pool: [], alertLog: [], pnlAth: { 'sol:aaa': { athMcap: 1 } } }, file);
   assert.equal(kept.seen['sol:aaa'], true);
   assert.equal(kept.pool.length, 2);
+  assert.equal(kept.pnlAth, undefined);
+});
+
+test('pnl file keeps saved ATH and ranks only records with both caps', () => {
+  const existing = {
+    'sol:aaa': { symbol: 'OLD', entryMcap: 10, athMcap: 150, multiple: 15, pct: 1400, updatedAt: 5, lastError: '' },
+    'sol:bad': { symbol: 'BAD', entryMcap: 20, athMcap: null, multiple: null, pct: null, updatedAt: 4, lastError: 'ATH yok' },
+  };
+  const map = api.mergePnlMap(existing, [{ chain: 'sol', address: 'aaa', symbol: 'EARLY', entryMcap: 100 }]);
+  assert.equal(map['sol:aaa'].athMcap, 150);
+  assert.equal(map['sol:aaa'].entryMcap, 100);
+  assert.equal(map['sol:aaa'].symbol, 'EARLY');
+  assert.equal(map['sol:aaa'].multiple, 1.5);
+  assert.equal(map['sol:aaa'].pct, 50);
+  assert.equal(map['sol:bad'].lastError, 'ATH yok');
+  assert.equal(map['sol:bad'].athMcap, null);
+  const merged = api.mergePnlFromSources(
+    existing,
+    { seen: { 'sol:aaa': true }, pool: [{ chain: 'sol', address: 'aaa', timestamp: 1, card: { mcUsd: 100, symbol: 'EARLY' } }], pnlAth: { 'sol:aaa': { athMcap: 9 } } },
+    { seen: {}, pool: [] }
+  );
+  assert.equal(merged.map['sol:aaa'].athMcap, 150);
+  assert.equal(merged.fromFile, 1);
+  const fresh = api.mergePnlMap({}, [{ chain: 'sol', address: 'bbb', symbol: 'NEW', entryMcap: 40 }]);
+  api.absorbLegacyAth(fresh, { 'sol:bbb': { athMcap: 80, athFetchedAt: 3 } });
+  assert.equal(fresh['sol:bbb'].athMcap, 80);
+  assert.equal(fresh['sol:bbb'].multiple, 2);
+  const text = api.formatPnl(api.pnlRecords(map));
+  assert.equal(text.includes('$EARLY'), true);
+  assert.equal(text.includes('$BAD'), false);
+  assert.equal(text.includes('Henüz sıralanacak token yok.'), false);
+  const progress = api.pnlProgress(map);
+  assert.equal(progress.total, 2);
+  assert.equal(progress.ranked, 1);
+  assert.equal(progress.lastError, 'ATH yok');
 });
 
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {

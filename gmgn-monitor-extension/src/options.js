@@ -17,10 +17,39 @@ var REF_IDS = {
   btg: 'refBtg',
 };
 
-function note(message, bad) {
+var monitorLine = '';
+var monitorBad = false;
+
+function renderNote(pnlText) {
   var el = document.getElementById('note');
-  el.textContent = message || '';
-  el.className = bad ? 'bad' : '';
+  var parts = [];
+  if (monitorLine) parts.push(monitorLine);
+  if (pnlText) parts.push(pnlText);
+  el.textContent = parts.join('\n');
+  el.className = monitorBad ? 'bad' : '';
+}
+
+function note(message, bad) {
+  monitorLine = message || '';
+  monitorBad = !!bad;
+  chrome.storage.local.get(['pnlLog', 'pnlView'], function (data) {
+    renderNote(pnlTextFrom(data || {}));
+  });
+}
+
+function pnlTextFrom(data) {
+  var view = data.pnlView || {};
+  var lines = Array.isArray(data.pnlLog) ? data.pnlLog : [];
+  var head = '';
+  if (view.total) head = 'PnL ' + (Number(view.done) || 0) + '/' + view.total;
+  if (view.lastError) head += (head ? '\n' : '') + 'Son hata: ' + view.lastError;
+  return [head].concat(lines).filter(Boolean).join('\n');
+}
+
+function refreshPnlNote() {
+  chrome.storage.local.get(['pnlLog', 'pnlView'], function (data) {
+    renderNote(pnlTextFrom(data || {}));
+  });
 }
 
 function readForm() {
@@ -155,6 +184,16 @@ document.getElementById('test').addEventListener('click', function () {
   });
 });
 
+document.getElementById('pnlRefresh').addEventListener('click', function () {
+  if (!beginAction()) return;
+  chrome.runtime.sendMessage({ type: 'PNL_REFRESH' }).then(function (res) {
+    if (endAction(res)) return;
+    if (!res || !res.ok) note((res && res.error) || 'PnL yenilenemedi', true);
+    else if (res.running && res.progress) note('PnL ' + res.progress.done + '/' + res.progress.total);
+    refreshPnlNote();
+  });
+});
+
 document.getElementById('pickDir').addEventListener('click', function () {
   if (!beginAction()) return;
   if (typeof showDirectoryPicker !== 'function') {
@@ -184,6 +223,13 @@ document.getElementById('pickDir').addEventListener('click', function () {
 function applySettings(res) {
   if (res && res.settings) fillForm(res.settings);
 }
+
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== 'local') return;
+  if (!changes.pnlLog && !changes.pnlView) return;
+  refreshPnlNote();
+});
+refreshPnlNote();
 
 chrome.runtime.sendMessage({ type: 'SYNC_FILE' }).then(function (res) {
   applySettings(res);
