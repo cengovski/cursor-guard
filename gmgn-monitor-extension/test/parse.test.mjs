@@ -382,6 +382,55 @@ test('backfill entry mcap from the earliest pool card for seen sends', () => {
   assert.equal(api.backfillPnlRecords(seen, pool, next), next);
 });
 
+test('pnl list comes from seen in the data file, not alertLog', () => {
+  const file = {
+    seen: { 'sol:aaa': true, 'sol:skip': 'skip' },
+    pool: [
+      { chain: 'sol', address: 'aaa', timestamp: 50, card: { mcUsd: 9000, symbol: 'LATE' } },
+      { chain: 'sol', address: 'aaa', timestamp: 10, card: { mcUsd: 100000, symbol: 'EARLY' } },
+    ],
+  };
+  const storage = {
+    seen: {},
+    pool: [],
+    alertLog: [{ chain: 'sol', address: 'zzz', symbol: 'LOG', entryMcap: 5, athMcap: 50 }],
+  };
+  const waiting = api.pnlStatus({ handle: true, fileRead: true, file, storage, ath: {} });
+  assert.equal(waiting.kind, 'wait');
+  assert.equal(waiting.fromFile, 1);
+  assert.equal(waiting.text, 'Dosyadan 1 token yüklendi.');
+  assert.equal(waiting.text.includes('Henüz sıralanacak token yok.'), false);
+  assert.equal(waiting.entries.length, 1);
+  assert.equal(waiting.entries[0].symbol, 'EARLY');
+  assert.equal(waiting.entries[0].entryMcap, 100000);
+  const ranked = api.pnlStatus({
+    handle: true,
+    fileRead: true,
+    file,
+    storage,
+    ath: { 'sol:aaa': { athMcap: 1500000, athFetchedAt: 1 } },
+  });
+  assert.equal(ranked.kind, 'rank');
+  assert.equal(ranked.text.includes('$EARLY'), true);
+  assert.equal(ranked.text.includes('Henüz sıralanacak token yok.'), false);
+  assert.equal(ranked.text.includes('$LOG'), false);
+  const none = api.pnlStatus({
+    handle: true,
+    fileRead: true,
+    file: { seen: {}, pool: [] },
+    storage: { seen: { 'sol:skip': 'skip' }, pool: [], alertLog: storage.alertLog },
+    ath: {},
+  });
+  assert.equal(none.kind, 'empty');
+  assert.equal(none.text, 'Henüz sıralanacak token yok.');
+  const missing = api.pnlStatus({ handle: false, fileRead: false, file: null, storage, ath: {} });
+  assert.equal(missing.kind, 'no-folder');
+  assert.equal(missing.text, 'Veri klasörü seçilmedi.');
+  const kept = api.mergeDataFile({ seen: {}, pool: [], alertLog: [] }, file);
+  assert.equal(kept.seen['sol:aaa'], true);
+  assert.equal(kept.pool.length, 2);
+});
+
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {
   const listed = { solana: { XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3: true }, ethereum: { '0xabc': true }, 'binance-smart-chain': {}, base: {} };
   assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3', symbol: 'AAPL' }, listed), true);

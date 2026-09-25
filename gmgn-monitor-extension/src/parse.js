@@ -990,6 +990,91 @@
     return next || log;
   }
 
+  function sentPnlEntries(seen, pool) {
+    var earliest = {};
+    (Array.isArray(pool) ? pool : []).forEach(function (row) {
+      if (!row || !row.address || !row.card) return;
+      var key = String(row.chain || '') + ':' + String(row.address);
+      var ts = Number(row.timestamp);
+      if (!isFinite(ts)) ts = Infinity;
+      var prev = earliest[key];
+      if (!prev || ts < prev.ts) earliest[key] = { ts: ts, row: row };
+    });
+    var out = [];
+    Object.keys(seen || {}).forEach(function (key) {
+      if (seen[key] !== true) return;
+      var hit = earliest[key];
+      if (!hit) return;
+      var mc = Number(hit.row.card.mcUsd);
+      if (!(mc > 0)) return;
+      out.push({
+        chain: hit.row.chain,
+        address: hit.row.address,
+        symbol: String(hit.row.card.symbol || '').replace(/^\$/, ''),
+        entryMcap: mc,
+      });
+    });
+    return out;
+  }
+
+  function unionSeen(fileSeen, localSeen) {
+    var seen = Object.assign({}, fileSeen || {}, localSeen || {});
+    Object.keys(fileSeen || {}).forEach(function (key) {
+      if (fileSeen[key] === true) seen[key] = true;
+    });
+    Object.keys(localSeen || {}).forEach(function (key) {
+      if (localSeen[key] === true) seen[key] = true;
+    });
+    return seen;
+  }
+
+  function pnlStatus(opts) {
+    opts = opts || {};
+    var file = opts.fileRead ? opts.file : null;
+    var storage = opts.storage || {};
+    var filePool = file && Array.isArray(file.pool) ? file.pool : [];
+    var storePool = Array.isArray(storage.pool) ? storage.pool : [];
+    var fromFile = sentPnlEntries(file && file.seen, filePool);
+    var entries = sentPnlEntries(unionSeen(file && file.seen, storage.seen), filePool.concat(storePool));
+    var ath = opts.ath || {};
+    entries.forEach(function (row) {
+      var saved = ath[String(row.chain || '') + ':' + String(row.address || '')];
+      if (!saved || !(Number(saved.athMcap) > 0)) return;
+      row.athMcap = Number(saved.athMcap);
+      row.athFetchedAt = Number(saved.athFetchedAt) || 0;
+    });
+    var ranked = 0;
+    entries.forEach(function (row) { if (Number(row.athMcap) > 0) ranked += 1; });
+    var base = { fromFile: fromFile.length, sent: entries.length, ranked: ranked, entries: entries };
+    if (!opts.handle) return Object.assign(base, { kind: 'no-folder', text: 'Veri klasörü seçilmedi.' });
+    if (!opts.fileRead && !entries.length) return Object.assign(base, { kind: 'no-folder', text: 'Veri klasörü seçilmedi.' });
+    if (!entries.length) return Object.assign(base, { kind: 'empty', text: 'Henüz sıralanacak token yok.' });
+    if (!ranked) return Object.assign(base, { kind: 'wait', text: 'Dosyadan ' + fromFile.length + ' token yüklendi.' });
+    return Object.assign(base, { kind: 'rank', text: formatPnl(entries) });
+  }
+
+  function mergeDataFile(local, file) {
+    var next = Object.assign({}, file || {}, local || {});
+    next.seen = unionSeen(file && file.seen, local && local.seen);
+    var pool = [];
+    var seenRow = {};
+    [].concat((file && file.pool) || [], (local && local.pool) || []).forEach(function (row) {
+      if (!row || !row.address) return;
+      var key = String(row.chain || '') + ':' + String(row.address) + ':' + String(row.timestamp || '') + ':' + String(row.tab || '');
+      if (seenRow[key]) return;
+      seenRow[key] = true;
+      pool.push(row);
+    });
+    next.pool = pool;
+    var ath = Object.assign({}, (file && file.pnlAth) || {}, (local && local.pnlAth) || {});
+    if (Object.keys(ath).length) next.pnlAth = ath;
+    if (!(local && Array.isArray(local.alertLog) && local.alertLog.length) && file && Array.isArray(file.alertLog)) {
+      next.alertLog = file.alertLog;
+    }
+    if (!(local && local.settings) && file) next.settings = file.settings;
+    return next;
+  }
+
   function sampleAlert() {
     return {
       chain: 'sol',
@@ -1039,5 +1124,8 @@
     pnlPercent: pnlPercent,
     formatPnl: formatPnl,
     backfillPnlRecords: backfillPnlRecords,
+    sentPnlEntries: sentPnlEntries,
+    pnlStatus: pnlStatus,
+    mergeDataFile: mergeDataFile,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

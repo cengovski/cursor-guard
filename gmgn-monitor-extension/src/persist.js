@@ -78,6 +78,22 @@
     }
   }
 
+  async function readSavedFile() {
+    var dir = await dirHandle();
+    if (!dir || typeof dir.getFileHandle !== 'function') return { handle: false, file: null };
+    try {
+      var fh = await dir.getFileHandle(FILE_NAME);
+      var file = await fh.getFile();
+      var text = await file.text();
+      if (!text) return { handle: true, file: null };
+      var parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { handle: true, file: null };
+      return { handle: true, file: parsed };
+    } catch (e) {
+      return { handle: true, file: null };
+    }
+  }
+
   async function readDataFile() {
     var dir = await dirHandle();
     if (!(await canWrite(dir))) return null;
@@ -109,6 +125,7 @@
     localEmpty: localEmpty,
     shouldRestore: shouldRestore,
     rememberDir: rememberDir,
+    readSavedFile: readSavedFile,
     readDataFile: readDataFile,
     writeDataFile: writeDataFile,
   };
