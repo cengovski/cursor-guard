@@ -1098,6 +1098,56 @@
     };
   }
 
+  var USER_GAP_MS = 8000;
+
+  function emptyUserGuard() {
+    return { busy: false, lastAt: {}, addrAt: {}, noticeAt: {}, gmgnAt: {} };
+  }
+
+  function contractAddress(text) {
+    var t = String(text || '').trim();
+    if (/^0x[a-fA-F0-9]{40}$/i.test(t)) return t.toLowerCase();
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t)) return t;
+    return '';
+  }
+
+  function admitUser(state, hit, now) {
+    var chat = String((hit && hit.chatId) || '');
+    var user = String((hit && hit.userId) || '');
+    var key = chat + '\n' + user;
+    var chatKey = 'chat\n' + chat;
+    var addr = hit && hit.address ? String(hit.address) : '';
+    var addrKey = addr ? key + '\n' + addr : '';
+    var globalAddr = addr ? '\n' + addr : '';
+    function notice() {
+      var nkey = chat || key;
+      if (state.noticeAt[nkey] && now - state.noticeAt[nkey] < USER_GAP_MS) return false;
+      state.noticeAt[nkey] = now;
+      return true;
+    }
+    var cooled = (state.lastAt[key] && now - state.lastAt[key] < USER_GAP_MS)
+      || (chat && state.lastAt[chatKey] && now - state.lastAt[chatKey] < USER_GAP_MS);
+    var sameAddr = (addrKey && state.addrAt[addrKey] && now - state.addrAt[addrKey] < USER_GAP_MS)
+      || (globalAddr && state.addrAt[globalAddr] && now - state.addrAt[globalAddr] < USER_GAP_MS);
+    if (state.busy || cooled || sameAddr) return { allow: false, notice: notice() };
+    state.lastAt[key] = now;
+    if (chat) state.lastAt[chatKey] = now;
+    if (addrKey) state.addrAt[addrKey] = now;
+    if (globalAddr) state.addrAt[globalAddr] = now;
+    state.busy = true;
+    return { allow: true, notice: false };
+  }
+
+  function claimGmgnAddress(state, chain, address, now) {
+    var addr = String(address || '').trim();
+    if (!addr) return false;
+    var key = String(chain || '') + ':' + addr.toLowerCase();
+    var prev = state.gmgnAt[key] || 0;
+    if (prev && now - prev < USER_GAP_MS) return false;
+    state.gmgnAt[key] = now;
+    return true;
+  }
+
   root.GmgnParse = {
     CHAIN_ORDER: CHAIN_ORDER,
     TAB_ORDER: TAB_ORDER,
@@ -1127,5 +1177,9 @@
     sentPnlEntries: sentPnlEntries,
     pnlStatus: pnlStatus,
     mergeDataFile: mergeDataFile,
+    emptyUserGuard: emptyUserGuard,
+    contractAddress: contractAddress,
+    admitUser: admitUser,
+    claimGmgnAddress: claimGmgnAddress,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

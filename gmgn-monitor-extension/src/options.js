@@ -79,17 +79,45 @@ function numericOk(value) {
   return Number.isFinite(Number(value));
 }
 
+var actionBusy = false;
+var actionNoted = false;
+
+function beginAction() {
+  if (actionBusy) {
+    if (!actionNoted) note('Bekleyin.', true);
+    actionNoted = true;
+    return false;
+  }
+  actionBusy = true;
+  actionNoted = false;
+  return true;
+}
+
+function endAction(res) {
+  actionBusy = false;
+  if (res && res.ignored) return true;
+  if (res && res.wait) {
+    if (!actionNoted) note('Bekleyin.', true);
+    actionNoted = true;
+    return true;
+  }
+  return false;
+}
+
 document.getElementById('form').addEventListener('submit', function (e) {
   e.preventDefault();
+  if (!beginAction()) return;
   var settings = readForm();
   var fields = ['minMarketCap', 'minVolume', 'minInflowAbs', 'minPriceChange', 'minWalletRows'];
   for (var i = 0; i < fields.length; i++) {
     if (!numericOk(settings[fields[i]])) {
+      actionBusy = false;
       note('Filtreler sayı olmalı ya da boş bırakılmalı.', true);
       return;
     }
   }
   chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', settings: settings }).then(function (res) {
+    if (endAction(res)) return;
     if (!res || !res.ok) {
       note((res && res.error) || 'Kaydedilemedi', true);
       return;
@@ -100,14 +128,20 @@ document.getElementById('form').addEventListener('submit', function (e) {
 });
 
 document.getElementById('reset').addEventListener('click', function () {
-  if (!confirm('Havuz ve görülen uyarılar silinsin mi?')) return;
+  if (!beginAction()) return;
+  if (!confirm('Havuz ve görülen uyarılar silinsin mi?')) {
+    actionBusy = false;
+    return;
+  }
   chrome.runtime.sendMessage({ type: 'RESET_POOL' }).then(function (res) {
+    if (endAction(res)) return;
     if (!res || res.error) note((res && res.error) || 'Sıfırlanamadı', true);
     else note('Havuz sıfırlandı.');
   });
 });
 
 document.getElementById('test').addEventListener('click', function () {
+  if (!beginAction()) return;
   var settings = readForm();
   chrome.runtime.sendMessage({
     type: 'TEST_MESSAGE',
@@ -115,13 +149,16 @@ document.getElementById('test').addEventListener('click', function () {
     chatId: settings.chatId,
     refs: settings.refs,
   }).then(function (res) {
+    if (endAction(res)) return;
     if (!res || !res.ok) note((res && res.error) || 'Test gönderilemedi', true);
     else note('Test mesajı gönderildi.');
   });
 });
 
 document.getElementById('pickDir').addEventListener('click', function () {
+  if (!beginAction()) return;
   if (typeof showDirectoryPicker !== 'function') {
+    actionBusy = false;
     note('Bu Chrome sürümü klasör seçemiyor.', true);
     return;
   }
@@ -130,6 +167,7 @@ document.getElementById('pickDir').addEventListener('click', function () {
       return chrome.runtime.sendMessage({ type: 'SYNC_FILE' });
     });
   }).then(function (res) {
+    if (endAction(res)) return;
     if (!res || !res.ok) {
       note((res && res.error) || 'Klasör kaydedilemedi', true);
       return;
@@ -137,6 +175,7 @@ document.getElementById('pickDir').addEventListener('click', function () {
     if (res.settings) fillForm(res.settings);
     note(res.restored ? 'Veri dosyasından yüklendi.' : 'Veri klasörü seçildi.');
   }).catch(function (err) {
+    actionBusy = false;
     if (err && err.name === 'AbortError') return;
     note('Klasör seçilemedi.', true);
   });

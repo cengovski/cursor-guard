@@ -15,6 +15,29 @@ function send(type) {
   return chrome.runtime.sendMessage({ type: type });
 }
 
+var clickBusy = false;
+var waitNoted = false;
+
+function act(type) {
+  if (clickBusy) {
+    if (!waitNoted) text('error', 'Bekleyin.');
+    waitNoted = true;
+    return;
+  }
+  clickBusy = true;
+  send(type).then(function (res) {
+    clickBusy = false;
+    if (res && res.ignored) return;
+    if (res && res.wait) {
+      if (!waitNoted) text('error', 'Bekleyin.');
+      waitNoted = true;
+      return;
+    }
+    waitNoted = false;
+    if (res) render(res);
+  });
+}
+
 function refresh() {
   send('GET_STATUS').then(render).catch(function (err) {
     text('error', String(err && err.message || err));
@@ -22,14 +45,20 @@ function refresh() {
 }
 
 document.getElementById('start').addEventListener('click', function () {
-  send('START').then(render);
+  act('START');
 });
 document.getElementById('stop').addEventListener('click', function () {
-  send('STOP').then(render);
+  act('STOP');
 });
 document.getElementById('options').addEventListener('click', function (e) {
   e.preventDefault();
-  chrome.runtime.openOptionsPage();
+  if (clickBusy) return;
+  clickBusy = true;
+  Promise.resolve(chrome.runtime.openOptionsPage()).then(function () {
+    clickBusy = false;
+  }, function () {
+    clickBusy = false;
+  });
 });
 
 refresh();

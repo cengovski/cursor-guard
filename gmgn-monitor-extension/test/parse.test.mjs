@@ -448,3 +448,35 @@ test('RWA and tokenized stocks are skipped by address or issuer marker, not by t
   assert.equal(api.shouldSkipToken({ chain: 'sol', address: '0x1', symbol: 'STOCK', tags: [] }, {}), false);
   assert.equal(api.shouldSkipToken(card, {}), false);
 });
+
+test('user submits and repeated addresses are dropped inside 8 seconds', () => {
+  const evm = '0x' + 'ab'.repeat(20);
+  const sol = 'HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ';
+  assert.equal(api.contractAddress(evm.toUpperCase()), evm);
+  assert.equal(api.contractAddress(sol), sol);
+  assert.equal(api.contractAddress('/pnl'), '');
+  assert.equal(api.contractAddress('hello'), '');
+  const state = api.emptyUserGuard();
+  const first = api.admitUser(state, { chatId: '1', userId: '9', address: evm }, 10000);
+  assert.equal(first.allow, true);
+  assert.equal(first.notice, false);
+  state.busy = false;
+  const mash = api.admitUser(state, { chatId: '1', userId: '9', address: evm }, 10000 + 1000);
+  assert.equal(mash.allow, false);
+  assert.equal(mash.notice, true);
+  const again = api.admitUser(state, { chatId: '1', userId: '9', address: sol }, 10000 + 2000);
+  assert.equal(again.allow, false);
+  assert.equal(again.notice, false);
+  const other = api.admitUser(state, { chatId: '1', userId: '8', address: sol }, 10000 + 3000);
+  assert.equal(other.allow, false);
+  state.busy = true;
+  const busy = api.admitUser(state, { chatId: '2', userId: '1', address: '' }, 10000 + 9000);
+  assert.equal(busy.allow, false);
+  state.busy = false;
+  const later = api.admitUser(state, { chatId: '1', userId: '9', address: evm }, 10000 + 8000);
+  assert.equal(later.allow, true);
+  state.busy = false;
+  assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000), true);
+  assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000 + 1000), false);
+  assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000 + 8000), true);
+});

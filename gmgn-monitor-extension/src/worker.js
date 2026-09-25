@@ -324,7 +324,15 @@ function sendScan(port, session, settings) {
   });
 }
 
+var tabOpen = null;
+
 async function openOrFocus(session) {
+  if (tabOpen) return tabOpen;
+  tabOpen = openMonitor(session).finally(function () { tabOpen = null; });
+  return tabOpen;
+}
+
+async function openMonitor(session) {
   var tab = await getManagedTab(session);
   var url = monitorUrl(session.chain);
   if (!tab) {
@@ -558,6 +566,7 @@ async function onChainDone(msg) {
     var item = merged[i];
     var key = item.chain + ':' + item.address;
     if (local.seen[key]) continue;
+    if (!GmgnParse.claimGmgnAddress(userGuard, item.chain, item.address, Date.now())) continue;
     if (GmgnParse.shouldSkipToken(item, rwaIndex)) {
       local.seen[key] = 'skip';
       await saveLocal({ seen: local.seen });
@@ -628,10 +637,11 @@ async function onPortMessage(port, msg) {
 }
 
 async function startScan() {
+  var session = await getSession();
+  if (session.running) return statusPayload();
   var settings = await getSettings();
   var chains = GmgnParse.enabledChainOrder(settings.chains);
   var tabs = enabledTabs(settings);
-  var session = await getSession();
   if (!chains.length) {
     session.running = false;
     session.error = 'En az bir zincir seçin.';
@@ -702,10 +712,29 @@ chrome.runtime.onConnect.addListener(function (port) {
   });
 });
 
+var UI_ACTIONS = { START: 1, STOP: 1, SAVE_SETTINGS: 1, SYNC_FILE: 1, RESET_POOL: 1, TEST_MESSAGE: 1 };
+var userGuard = GmgnParse.emptyUserGuard();
+var uiWaitNoted = false;
+
 chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
+  var ui = !!(msg && UI_ACTIONS[msg.type]);
+  if (ui && userGuard.busy) {
+    var tell = !uiWaitNoted;
+    uiWaitNoted = true;
+    sendResponse(tell ? { ok: false, wait: true, error: 'Bekleyin.' } : { ok: true, ignored: true });
+    return true;
+  }
+  if (ui) {
+    userGuard.busy = true;
+    uiWaitNoted = false;
+  }
   enqueue(function () {
     return handleMessage(msg);
-  }).then(sendResponse, function (err) {
+  }).then(function (res) {
+    if (ui) userGuard.busy = false;
+    sendResponse(res);
+  }, function (err) {
+    if (ui) userGuard.busy = false;
     sendResponse({ ok: false, error: safeError(err, '') });
   });
   return true;
@@ -734,6 +763,7 @@ async function handleMessage(msg) {
 var PNL_DUP_MS = 5 * 60 * 1000;
 var ATH_DAY_MS = 24 * 60 * 60 * 1000;
 var athRunning = false;
+var athWaitNoted = false;
 
 async function fetchAthMcap(chain, address, apiKey) {
   var ctrl = new AbortController();
@@ -839,6 +869,7 @@ async function runAthRefresh() {
     if (pendingNow.pnlPostPending && settings.botToken && settings.chatId) await deliverRanked(settings);
   } finally {
     athRunning = false;
+    athWaitNoted = false;
   }
 }
 
@@ -905,20 +936,50 @@ async function pollPnl() {
     if (!data.result.length) return;
     var next = offset;
     var want = false;
-    var nowSec = Math.floor(Date.now() / 1000);
-    data.result.forEach(function (up) {
-      if (!up || up.update_id == null) return;
+    var notify = false;
+    var now = Date.now();
+    var nowSec = Math.floor(now / 1000);
+    for (var i = 0; i < data.result.length; i++) {
+      var up = data.result[i];
+      if (!up || up.update_id == null) continue;
       if (up.update_id + 1 > next) next = up.update_id + 1;
       var msg = up.message;
-      if (!msg || !msg.chat || String(msg.chat.id) !== String(settings.chatId)) return;
+      if (!msg || !msg.chat || String(msg.chat.id) !== String(settings.chatId)) continue;
       var text = String(msg.text || '').trim();
-      if (!/^\/pnl(?:@[A-Za-z0-9_]+)?$/.test(text)) return;
+      var pnl = /^\/pnl(?:@[A-Za-z0-9_]+)?$/.test(text);
+      var addr = GmgnParse.contractAddress(text);
+      if (!pnl && !addr) continue;
       var age = nowSec - Number(msg.date || 0);
-      if (age >= 0 && age <= 120) want = true;
-    });
-    await saveLocal({ tgUpdateOffset: next });
-    if (want) return replyPnl(settings);
-    return false;
+      if (!(age >= 0 && age <= 120)) continue;
+      var hit = { chatId: msg.chat.id, userId: msg.from && msg.from.id != null ? msg.from.id : '', address: addr };
+      if (pnl && athRunning) {
+        if (!athWaitNoted) {
+          athWaitNoted = true;
+          notify = true;
+        }
+        continue;
+      }
+      var decision = GmgnParse.admitUser(userGuard, hit, now);
+      if (!decision.allow) {
+        if (decision.notice) notify = true;
+        continue;
+      }
+      if (!pnl) {
+        userGuard.busy = false;
+        continue;
+      }
+      want = true;
+    }
+    try {
+      await saveLocal({ tgUpdateOffset: next });
+      if (notify && settings.botToken && settings.chatId) {
+        try { await sendTelegram(settings.botToken, settings.chatId, 'Bekleyin.', null, true); } catch (e) { /* one notice */ }
+      }
+      if (!want) return false;
+      return await replyPnl(settings);
+    } finally {
+      if (want) userGuard.busy = false;
+    }
   } catch (e) {
     return false;
   }

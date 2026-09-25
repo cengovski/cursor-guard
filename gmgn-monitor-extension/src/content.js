@@ -206,7 +206,10 @@
       }
       var tfBtn = pickVisible(main, '[data-testid="filter-tag-' + msg.timeframe + '"]');
       if (tfBtn) {
-        tfBtn.click();
+        var pressed = tfBtn.getAttribute('aria-pressed') === 'true'
+          || tfBtn.getAttribute('aria-selected') === 'true'
+          || /\bactive\b/.test(tfBtn.className || '');
+        if (!pressed) tfBtn.click();
         await sleep(400, myJob);
       } else {
         post({
@@ -251,8 +254,13 @@
 
   function onPortMessage(msg) {
     if (!msg) return;
-    if (msg.type === 'SCAN') runScan(msg);
-    if (msg.type === 'STOP') job += 1;
+    if (msg.type === 'STOP') {
+      job += 1;
+      return;
+    }
+    if (msg.type !== 'SCAN') return;
+    if (scanning && msg.scanId === activeScanId) return;
+    runScan(msg);
   }
 
   function connect() {
