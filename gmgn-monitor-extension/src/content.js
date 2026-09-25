@@ -252,12 +252,37 @@
     }
   }
 
+  function pageFetch(url, apiKey) {
+    var headers = { Accept: 'application/json' };
+    if (apiKey) headers['X-APIKEY'] = apiKey;
+    return fetch(url, { credentials: 'include', headers: headers }).then(function (res) {
+      return res.text().then(function (body) {
+        return { status: res.status, body: body };
+      }, function () {
+        return { status: res.status, body: '' };
+      });
+    });
+  }
+
   function onPortMessage(msg) {
     if (!msg) return;
+    if (msg.type === 'ATH') {
+      var reply = currentPort;
+      pageFetch(msg.apiKey ? msg.openUrl : msg.publicUrl, msg.apiKey || '').then(function (result) {
+        if (result.status === 403 && msg.apiKey && msg.publicUrl) return pageFetch(msg.publicUrl, '');
+        return result;
+      }).then(function (result) {
+        try { reply.postMessage({ type: 'ATH_RESULT', id: msg.id, status: result.status, body: result.body }); } catch (e) { /* closed */ }
+      }).catch(function () {
+        try { reply.postMessage({ type: 'ATH_RESULT', id: msg.id, status: 0, body: '' }); } catch (e) { /* closed */ }
+      });
+      return;
+    }
     if (msg.type === 'STOP') {
       job += 1;
       return;
     }
+    if (location.pathname.indexOf('/monitor') !== 0) return;
     if (msg.type !== 'SCAN') return;
     if (scanning && msg.scanId === activeScanId) return;
     runScan(msg);

@@ -711,6 +711,14 @@ chrome.runtime.onConnect.addListener(function (port) {
     if (ports.get(tabId) === port) ports.delete(tabId);
   });
   port.onMessage.addListener(function (msg) {
+    if (msg && msg.type === 'ATH_RESULT') {
+      var done = athWaiters[msg.id];
+      if (done) {
+        delete athWaiters[msg.id];
+        done(msg);
+      }
+      return;
+    }
     enqueue(function () { return onPortMessage(port, msg); });
   });
 });
@@ -770,32 +778,91 @@ var athRunning = false;
 var pnlPassOwnsFile = false;
 var athPass = { done: 0, total: 0, lastError: '' };
 var pnlLoadedLogged = -1;
+var athWaiters = {};
+
+function waitForPort(tabId, ms) {
+  return new Promise(function (resolve) {
+    var left = ms;
+    function tick() {
+      var port = ports.get(tabId);
+      if (port) return resolve(port);
+      if (left <= 0) return resolve(null);
+      left -= 200;
+      setTimeout(tick, 200);
+    }
+    tick();
+  });
+}
+
+async function ensureAthPort() {
+  var tabs = await chrome.tabs.query({ url: 'https://gmgn.ai/*' });
+  for (var i = 0; i < tabs.length; i++) {
+    var ready = ports.get(tabs[i].id);
+    if (ready) return ready;
+  }
+  var tab = null;
+  for (var j = 0; j < tabs.length; j++) {
+    if ((tabs[j].url || '').indexOf('/monitor') !== -1) {
+      tab = tabs[j];
+      break;
+    }
+  }
+  if (!tab && tabs.length) tab = tabs[0];
+  if (!tab) {
+    var session = await getSession();
+    var created = await chrome.tabs.create({ url: monitorUrl(session.chain || 'sol'), active: false });
+    return waitForPort(created.id, 15000);
+  }
+  var waited = await waitForPort(tab.id, 2000);
+  if (waited) return waited;
+  try { await chrome.tabs.reload(tab.id); } catch (e) { /* closed */ }
+  return waitForPort(tab.id, 15000);
+}
+
+function askAth(port, payload) {
+  return new Promise(function (resolve, reject) {
+    var id = String(Date.now()) + ':' + Math.random().toString(16).slice(2);
+    var timer = setTimeout(function () {
+      delete athWaiters[id];
+      reject(new Error('GMGN zaman aşımı'));
+    }, 8000);
+    athWaiters[id] = function (msg) {
+      clearTimeout(timer);
+      resolve(msg);
+    };
+    try {
+      port.postMessage({
+        type: 'ATH',
+        id: id,
+        openUrl: payload.openUrl,
+        publicUrl: payload.publicUrl,
+        apiKey: payload.apiKey || '',
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      delete athWaiters[id];
+      reject(e);
+    }
+  });
+}
 
 async function fetchAthMcap(chain, address, apiKey) {
-  var ctrl = new AbortController();
-  var timer = setTimeout(function () { ctrl.abort(); }, 4000);
-  var signal = ctrl.signal;
+  var port = await ensureAthPort();
+  if (!port) throw new Error('GMGN sekme yok');
   var openUrl = 'https://gmgn.ai/v1/token/info'
     + '?chain=' + encodeURIComponent(chain)
     + '&address=' + encodeURIComponent(address)
     + '&timestamp=' + Math.floor(Date.now() / 1000)
     + '&client_id=' + gmgnClientId();
   var publicUrl = 'https://gmgn.ai/defi/quotation/v1/tokens/' + encodeURIComponent(chain) + '/' + encodeURIComponent(address);
-  try {
-    var info = null;
-    if (apiKey) {
-      try {
-        info = await gmgnGet(openUrl, { 'X-APIKEY': apiKey, Accept: 'application/json' }, signal);
-      } catch (e) {
-        info = await gmgnGet(publicUrl, { Accept: 'application/json' }, signal);
-      }
-    } else {
-      info = await gmgnGet(publicUrl, { Accept: 'application/json' }, signal);
-    }
-    return GmgnParse.athMcapFromInfo(info);
-  } finally {
-    clearTimeout(timer);
-  }
+  var msg = await askAth(port, { openUrl: openUrl, publicUrl: publicUrl, apiKey: apiKey || '' });
+  if (!msg || Number(msg.status) === 403) throw new Error('GMGN 403');
+  if (!(Number(msg.status) >= 200 && Number(msg.status) < 300)) throw new Error('GMGN ' + (msg.status || 'hata'));
+  var json = null;
+  try { json = JSON.parse(msg.body || ''); } catch (e) { json = null; }
+  if (json && json.code != null && Number(json.code) !== 0) throw new Error('GMGN ' + (json.message || json.code));
+  var data = json && json.data != null ? json.data : json;
+  return GmgnParse.athMcapFromInfo(data);
 }
 
 async function appendPnlLog(line, view) {
@@ -883,8 +950,7 @@ async function runAthRefresh() {
     var targets = [];
     Object.keys(map).forEach(function (key) {
       var rec = map[key];
-      if (!rec || !(Number(rec.entryMcap) > 0)) return;
-      if (!full && Number(rec.athMcap) > 0) return;
+      if (!GmgnParse.includeAthTarget(rec, full)) return;
       var cut = key.indexOf(':');
       targets.push({
         key: key,
@@ -894,9 +960,10 @@ async function runAthRefresh() {
         entryMcap: Number(rec.entryMcap),
       });
     });
-    if (targets.length && stamp.pnlPostPending && GmgnParse.pnlProgress(map).ranked > 0) await postTop20(settings, true);
     if (targets.length) await appendPnlLog('', { done: 0, total: targets.length, lastError: athPass.lastError });
     pnlPassOwnsFile = true;
+    var athStopped = false;
+    var refusalStreak = 0;
     if (targets.length) {
       for (var i = 0; i < targets.length; i++) {
         if (i) await sleep(300);
@@ -911,7 +978,9 @@ async function runAthRefresh() {
         }
         var rec = map[row.key];
         rec.updatedAt = Date.now();
-        if (err) rec.lastError = err;
+        var refused = GmgnParse.athRefusal(err);
+        if (err && !refused) rec.lastError = err;
+        else if (refused) rec.lastError = 'GMGN 403';
         else {
           rec.lastError = '';
           rec.athMcap = Number(ath);
@@ -923,15 +992,26 @@ async function runAthRefresh() {
         var n = (i + 1) + '/' + targets.length;
         var label = row.symbol || row.address;
         if (!wrote && !err) err = 'PnL dosyası yazılamadı';
-        var view = { done: i + 1, total: targets.length, lastError: err || athPass.lastError };
+        var view = { done: i + 1, total: targets.length, lastError: refused ? 'GMGN 403' : (err || athPass.lastError) };
+        if (refused) {
+          refusalStreak += 1;
+          if (GmgnParse.stopAfterAthRefusals(refusalStreak)) {
+            athStopped = true;
+            await appendPnlLog('GMGN refused the session and the pass stopped', view);
+            break;
+          }
+          await appendPnlLog('', view);
+          continue;
+        }
+        refusalStreak = 0;
         if (err) await appendPnlLog('ATH ' + n + ' fail ' + label + ' ' + err, view);
         else await appendPnlLog('ATH ' + n + ' ok ' + label, view);
       }
-      if (full) await chrome.storage.local.set({ athRefreshAt: Date.now() });
+      if (full && !athStopped) await chrome.storage.local.set({ athRefreshAt: Date.now() });
     }
     pnlPassOwnsFile = false;
     var pendingNow = await chrome.storage.local.get('pnlPostPending');
-    if (pendingNow.pnlPostPending) await postTop20(settings, false);
+    if (pendingNow.pnlPostPending && GmgnParse.pnlProgress(map).ranked > 0) await postTop20(settings, false);
   } finally {
     pnlPassOwnsFile = false;
     athRunning = false;

@@ -19,7 +19,7 @@
   "options_page": "src/options.html",
   "content_scripts": [
     {
-      "matches": ["https://gmgn.ai/monitor*"],
+      "matches": ["https://gmgn.ai/*"],
       "js": ["src/parse.js", "src/content.js"],
       "run_at": "document_idle"
     }

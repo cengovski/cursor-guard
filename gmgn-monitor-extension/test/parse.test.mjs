@@ -464,6 +464,13 @@ test('pnl file keeps saved ATH and ranks only records with both caps', () => {
   assert.equal(progress.total, 2);
   assert.equal(progress.ranked, 1);
   assert.equal(progress.lastError, 'ATH yok');
+  assert.equal(api.includeAthTarget({ entryMcap: 10, athMcap: null, lastError: 'GMGN 403' }, false), true);
+  assert.equal(api.includeAthTarget({ entryMcap: 10, athMcap: 20, lastError: '' }, false), false);
+  assert.equal(api.includeAthTarget({ entryMcap: 10, athMcap: 20, lastError: 'GMGN 403' }, false), true);
+  assert.equal(api.athRefusal('GMGN 403'), true);
+  assert.equal(api.athRefusal('ATH yok'), false);
+  assert.equal(api.stopAfterAthRefusals(4), false);
+  assert.equal(api.stopAfterAthRefusals(5), true);
 });
 
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {

@@ -1108,6 +1108,21 @@
     });
   }
 
+  function includeAthTarget(rec, full) {
+    if (!rec || !(Number(rec.entryMcap) > 0)) return false;
+    var refused = String(rec.lastError || '').indexOf('403') !== -1;
+    if (!full && Number(rec.athMcap) > 0 && !refused) return false;
+    return true;
+  }
+
+  function athRefusal(err) {
+    return String(err || '').indexOf('403') !== -1;
+  }
+
+  function stopAfterAthRefusals(streak) {
+    return Number(streak) >= 5;
+  }
+
   function pnlProgress(map) {
     var keys = Object.keys(map || {});
     var done = 0;
@@ -1290,6 +1305,9 @@
     mergePnlFromSources: mergePnlFromSources,
     pnlRecords: pnlRecords,
     pnlProgress: pnlProgress,
+    includeAthTarget: includeAthTarget,
+    athRefusal: athRefusal,
+    stopAfterAthRefusals: stopAfterAthRefusals,
     pnlStatus: pnlStatus,
     mergeDataFile: mergeDataFile,
     emptyUserGuard: emptyUserGuard,
