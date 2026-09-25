@@ -315,6 +315,45 @@ test('telegram keyboard rows have at most 3 buttons', () => {
   assert.equal(sol[1].map((b) => b.text).join(), '🤖 BBT');
 });
 
+test('pnl multiple, percent, sort, and top 20 text', () => {
+  assert.equal(api.pnlMultiple(100000, 1500000), 15);
+  assert.equal(api.pnlPercent(15), 1400);
+  assert.equal(api.pnlMultiple(100000, 40000), 0.4);
+  assert.equal(api.pnlPercent(0.4), -60);
+  assert.equal(api.pnlMultiple(0, 10), null);
+  assert.equal(api.athMcapFromInfo({ ath_market_cap: 5, ath_price: 9, price: { price: 1 }, market_cap: 2 }), 5);
+  assert.equal(api.athMcapFromInfo({ ath_price: 4, price: { price: 2 }, market_cap: 100 }), 200);
+  assert.equal(api.athMcapFromInfo({ ath_price: 4, price: { price: 2 } }), null);
+  assert.equal(api.athMcapFromInfo({ token: { ath_price: 3, price: 1, usd_market_cap: 10 } }), 30);
+  assert.equal(api.formatPnl([
+    { chain: 'sol', address: 'low', symbol: 'SMALL', entryMcap: 100000, athMcap: 40000 },
+    { chain: 'eth', address: 'skip', symbol: 'NOATH', entryMcap: 50000 },
+    { chain: 'sol', address: 'high', symbol: 'TICKER', entryMcap: 100000, athMcap: 1500000 },
+    { chain: 'base', address: 'poolish', symbol: 'POOL', athMcap: 999 },
+  ]), [
+    'PNL · Top 20',
+    'İlk yayındaki MC ile GMGN ATH MC',
+    '',
+    '1. $TICKER · SOLANA',
+    'İlk MC $100K → ATH $1.5M',
+    '15.0x · +1400%',
+    '',
+    '2. $SMALL · SOLANA',
+    'İlk MC $100K → ATH $40K',
+    '0.4x · -60%',
+  ].join('\n'));
+  assert.equal(api.formatPnl([]), 'Henüz sıralanacak token yok.');
+  assert.equal(api.formatPnl([{ chain: 'sol', address: 'x', symbol: 'BARE', entryMcap: 1 }]), 'Henüz sıralanacak token yok.');
+  var many = [];
+  for (var i = 0; i < 21; i++) {
+    many.push({ chain: 'sol', address: String(i), symbol: 'T' + i, entryMcap: 100, athMcap: 100 * (i + 1) });
+  }
+  var lines = api.formatPnl(many).split('\n').filter(function (line) { return /^\d+\. \$/.test(line); });
+  assert.equal(lines.length, 20);
+  assert.equal(lines[0], '1. $T20 · SOLANA');
+  assert.equal(lines[19].startsWith('20. $T1 · '), true);
+});
+
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {
   const listed = { solana: { XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3: true }, ethereum: { '0xabc': true }, 'binance-smart-chain': {}, base: {} };
   assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3', symbol: 'AAPL' }, listed), true);

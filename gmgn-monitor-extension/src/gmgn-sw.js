@@ -146,7 +146,7 @@ function scheduleMirror() {
 }
 
 async function readBlob() {
-  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'alertLog', 'rwaIndex', 'cursor', 'savedAt']);
+  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'alertLog', 'rwaIndex', 'cursor', 'savedAt', 'tgUpdateOffset', 'athRefreshAt', 'pnlPostedAt']);
   var cursor = Object.assign(emptyCursor(), data.cursor || {});
   if (!Array.isArray(cursor.pending)) cursor.pending = [];
   return {
@@ -158,13 +158,16 @@ async function readBlob() {
     alertLog: Array.isArray(data.alertLog) ? data.alertLog : [],
     rwaIndex: data.rwaIndex || null,
     cursor: cursor,
+    tgUpdateOffset: data.tgUpdateOffset != null ? Number(data.tgUpdateOffset) || 0 : 0,
+    athRefreshAt: Number(data.athRefreshAt) || 0,
+    pnlPostedAt: Number(data.pnlPostedAt) || 0,
   };
 }
 
 async function writeBlob(blob) {
   var cursor = Object.assign(emptyCursor(), blob.cursor || {});
   if (!Array.isArray(cursor.pending)) cursor.pending = [];
-  await chrome.storage.local.set({
+  var next = {
     savedAt: Number(blob.savedAt) || Date.now(),
     settings: blob.settings || null,
     pool: Array.isArray(blob.pool) ? blob.pool : [],
@@ -173,7 +176,11 @@ async function writeBlob(blob) {
     alertLog: Array.isArray(blob.alertLog) ? blob.alertLog : [],
     rwaIndex: blob.rwaIndex || null,
     cursor: cursor,
-  });
+  };
+  if (blob.tgUpdateOffset != null) next.tgUpdateOffset = Number(blob.tgUpdateOffset) || 0;
+  if (blob.athRefreshAt != null) next.athRefreshAt = Number(blob.athRefreshAt) || 0;
+  if (blob.pnlPostedAt != null) next.pnlPostedAt = Number(blob.pnlPostedAt) || 0;
+  await chrome.storage.local.set(next);
 }
 
 async function flushMirror() {
@@ -385,17 +392,18 @@ async function onTabResult(msg) {
   }
 }
 
-async function sendTelegram(token, chatId, text, replyMarkup) {
+async function sendTelegram(token, chatId, text, replyMarkup, plain) {
+  var payload = {
+    chat_id: chatId,
+    text: text,
+    disable_web_page_preview: true,
+  };
+  if (!plain) payload.parse_mode = 'HTML';
+  if (replyMarkup) payload.reply_markup = replyMarkup;
   var res = await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: text,
-      parse_mode: 'HTML',
-      reply_markup: replyMarkup,
-      disable_web_page_preview: true,
-    }),
+    body: JSON.stringify(payload),
   });
   var data = await res.json();
   if (!data.ok) throw new Error(data.description || 'Telegram hatası');
@@ -561,12 +569,18 @@ async function onChainDone(msg) {
       await sendTelegram(settings.botToken, settings.chatId, html, markup);
       local.seen[key] = true;
       local.alertsSent += 1;
-      local.alertLog.push({
+      var sentAt = Date.now();
+      var entryMcap = Number(view.mcUsd);
+      if (!(entryMcap > 0)) entryMcap = Number(GmgnParse.parseMoney(view.mcText));
+      var entry = {
         chain: item.chain,
         address: item.address,
         symbol: item.symbol || '',
-        at: Date.now(),
-      });
+        at: sentAt,
+        sentAt: sentAt,
+      };
+      if (entryMcap > 0) entry.entryMcap = entryMcap;
+      local.alertLog.push(entry);
       session.error = '';
       await saveLocal({ seen: local.seen, alertsSent: local.alertsSent, alertLog: local.alertLog });
     } catch (e) {
@@ -713,15 +727,162 @@ async function handleMessage(msg) {
   return { ok: false, error: 'Bilinmeyen mesaj' };
 }
 
-chrome.alarms.onAlarm.addListener(function (alarm) {
-  if (alarm.name !== 'gmgn-keepalive') return;
-  enqueue(async function () {
-    var session = await getSession();
-    if (!session.running) return;
-    var tab = await getManagedTab(session);
-    if (tab && ports.get(tab.id)) return;
-    await openOrFocus(session);
+var PNL_DUP_MS = 5 * 60 * 1000;
+var ATH_DAY_MS = 24 * 60 * 60 * 1000;
+var athRunning = false;
+
+async function fetchAthMcap(chain, address, apiKey) {
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, 4000);
+  var signal = ctrl.signal;
+  var openUrl = 'https://gmgn.ai/v1/token/info'
+    + '?chain=' + encodeURIComponent(chain)
+    + '&address=' + encodeURIComponent(address)
+    + '&timestamp=' + Math.floor(Date.now() / 1000)
+    + '&client_id=' + gmgnClientId();
+  var publicUrl = 'https://gmgn.ai/defi/quotation/v1/tokens/' + encodeURIComponent(chain) + '/' + encodeURIComponent(address);
+  try {
+    var info = null;
+    if (apiKey) {
+      try {
+        info = await gmgnGet(openUrl, { 'X-APIKEY': apiKey, Accept: 'application/json' }, signal);
+      } catch (e) {
+        info = await gmgnGet(publicUrl, { Accept: 'application/json' }, signal);
+      }
+    } else {
+      info = await gmgnGet(publicUrl, { Accept: 'application/json' }, signal);
+    }
+    return GmgnParse.athMcapFromInfo(info);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function saveAth(chain, address, athMcap) {
+  var local = await getLocal();
+  var saved = false;
+  local.alertLog.forEach(function (row) {
+    if (saved || !row || row.chain !== chain || row.address !== address) return;
+    if (!(Number(row.entryMcap) > 0)) return;
+    row.athMcap = athMcap;
+    row.multiple = athMcap / Number(row.entryMcap);
+    row.athFetchedAt = Date.now();
+    saved = true;
   });
+  if (saved) await saveLocal({ alertLog: local.alertLog });
+}
+
+async function runAthRefresh() {
+  if (athRunning) return;
+  athRunning = true;
+  try {
+    var stamp = await chrome.storage.local.get('athRefreshAt');
+    var last = Number(stamp.athRefreshAt) || 0;
+    if (last && Date.now() - last < ATH_DAY_MS) return;
+    var settings = await getSettings();
+    var local = await getLocal();
+    var targets = [];
+    var seen = {};
+    local.alertLog.forEach(function (row) {
+      if (!row || !(Number(row.entryMcap) > 0) || !row.address) return;
+      var key = row.chain + ':' + row.address;
+      if (seen[key]) return;
+      seen[key] = true;
+      targets.push({ chain: row.chain, address: row.address });
+    });
+    if (!targets.length) return;
+    for (var i = 0; i < targets.length; i++) {
+      if (i) await sleep(300);
+      var row = targets[i];
+      var ath = null;
+      try { ath = await fetchAthMcap(row.chain, row.address, settings.gmgnApiKey); } catch (e) { ath = null; }
+      if (!(Number(ath) > 0)) continue;
+      await enqueue(function () { return saveAth(row.chain, row.address, Number(ath)); });
+    }
+    await enqueue(function () { return saveLocal({ athRefreshAt: Date.now() }); });
+  } finally {
+    athRunning = false;
+  }
+}
+
+async function postPnl(settings) {
+  var local = await getLocal();
+  var text = GmgnParse.formatPnl(local.alertLog);
+  await sendTelegram(settings.botToken, settings.chatId, text, null, true);
+  await saveLocal({ pnlPostedAt: Date.now() });
+}
+
+async function postScheduledPnl() {
+  var settings = await getSettings();
+  if (!settings.botToken || !settings.chatId) return;
+  var data = await chrome.storage.local.get('pnlPostedAt');
+  if (Date.now() - (Number(data.pnlPostedAt) || 0) < PNL_DUP_MS) return;
+  await postPnl(settings);
+}
+
+async function pollPnl() {
+  try {
+    var settings = await getSettings();
+    if (!settings.botToken || !settings.chatId) return;
+    var stored = await chrome.storage.local.get('tgUpdateOffset');
+    var hasOffset = stored.tgUpdateOffset != null && stored.tgUpdateOffset !== '';
+    var offset = Number(stored.tgUpdateOffset) || 0;
+    var url = 'https://api.telegram.org/bot' + settings.botToken + '/getUpdates?timeout=0&allowed_updates='
+      + encodeURIComponent('["message"]');
+    if (hasOffset) url += '&offset=' + offset;
+    var res = await fetch(url);
+    var data = await res.json();
+    if (!data || !data.ok || !Array.isArray(data.result)) return;
+    if (!data.result.length) return;
+    var next = offset;
+    var want = false;
+    var nowSec = Math.floor(Date.now() / 1000);
+    data.result.forEach(function (up) {
+      if (!up || up.update_id == null) return;
+      if (up.update_id + 1 > next) next = up.update_id + 1;
+      var msg = up.message;
+      if (!msg || !msg.chat || String(msg.chat.id) !== String(settings.chatId)) return;
+      var text = String(msg.text || '').trim();
+      if (!/^\/pnl(?:@[A-Za-z0-9_]+)?$/.test(text)) return;
+      var age = nowSec - Number(msg.date || 0);
+      if (age >= 0 && age <= 120) want = true;
+    });
+    await saveLocal({ tgUpdateOffset: next });
+    if (want) await postPnl(settings);
+  } catch (e) { /* skip */ }
+}
+
+async function maybeFirstAthRefresh() {
+  var stamp = await chrome.storage.local.get('athRefreshAt');
+  if (Number(stamp.athRefreshAt) > 0) return;
+  return runAthRefresh();
+}
+
+async function ensurePnlAlarms() {
+  var existing = await chrome.alarms.getAll();
+  var names = {};
+  existing.forEach(function (alarm) { names[alarm.name] = true; });
+  if (!names['gmgn-pnl-poll']) chrome.alarms.create('gmgn-pnl-poll', { periodInMinutes: 1 });
+  if (!names['gmgn-pnl-post']) chrome.alarms.create('gmgn-pnl-post', { periodInMinutes: 360 });
+  if (!names['gmgn-pnl-ath']) chrome.alarms.create('gmgn-pnl-ath', { periodInMinutes: 1440 });
+}
+
+chrome.alarms.onAlarm.addListener(function (alarm) {
+  if (alarm.name === 'gmgn-keepalive') {
+    enqueue(async function () {
+      var session = await getSession();
+      if (!session.running) return;
+      var tab = await getManagedTab(session);
+      if (tab && ports.get(tab.id)) return;
+      await openOrFocus(session);
+    });
+    return;
+  }
+  if (alarm.name === 'gmgn-pnl-poll') {
+    return enqueue(function () { return pollPnl(); }).then(function () { return maybeFirstAthRefresh(); });
+  }
+  if (alarm.name === 'gmgn-pnl-post') return enqueue(function () { return postScheduledPnl(); });
+  if (alarm.name === 'gmgn-pnl-ath') return runAthRefresh();
 });
 
 ensureAlarm();
@@ -729,4 +890,7 @@ enqueue(async function () {
   await migrateSessionCursor();
   await syncWithFile();
   await resumeIfUnlocked();
+  await ensurePnlAlarms();
+}).then(function () {
+  return runAthRefresh();
 });

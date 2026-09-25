@@ -862,6 +862,79 @@
     return { inline_keyboard: keyboard };
   }
 
+  function athMcapFromInfo(info) {
+    if (!info || typeof info !== 'object') return null;
+    if (info.token && typeof info.token === 'object') info = info.token;
+    var athMc = asNum(info.ath_market_cap);
+    if (athMc != null && athMc > 0) return athMc;
+    var priceObj = info.price && typeof info.price === 'object' ? info.price : null;
+    var priceUsd = asNum(priceObj ? priceObj.price : (typeof info.price === 'object' ? null : info.price));
+    var mc = asNum(info.market_cap != null ? info.market_cap : info.usd_market_cap);
+    var athPrice = asNum(info.ath_price);
+    if (athPrice != null && athPrice > 0 && priceUsd != null && priceUsd > 0 && mc != null && mc > 0) {
+      return mc * (athPrice / priceUsd);
+    }
+    return null;
+  }
+
+  function pnlMultiple(entryMcap, athMcap) {
+    var entry = Number(entryMcap);
+    var ath = Number(athMcap);
+    if (!(entry > 0) || !(ath > 0)) return null;
+    var multiple = ath / entry;
+    return isFinite(multiple) ? multiple : null;
+  }
+
+  function pnlPercent(multiple) {
+    var m = Number(multiple);
+    if (!isFinite(m)) return null;
+    return (m - 1) * 100;
+  }
+
+  function formatPnlMultiple(multiple) {
+    return (Math.round(Number(multiple) * 10) / 10).toFixed(1) + 'x';
+  }
+
+  function formatPnlPercent(percent) {
+    var n = Math.round(Number(percent));
+    if (!isFinite(n)) return '';
+    return (n > 0 ? '+' : '') + n + '%';
+  }
+
+  function rankPnl(entries) {
+    var seen = {};
+    var rows = [];
+    (Array.isArray(entries) ? entries : []).forEach(function (row) {
+      if (!row) return;
+      var multiple = pnlMultiple(row.entryMcap, row.athMcap);
+      if (multiple == null) return;
+      var key = String(row.chain || '') + ':' + String(row.address || '');
+      if (seen[key]) return;
+      seen[key] = true;
+      rows.push({
+        chain: row.chain,
+        symbol: String(row.symbol || '').replace(/^\$/, ''),
+        entryMcap: Number(row.entryMcap),
+        athMcap: Number(row.athMcap),
+        multiple: multiple,
+        percent: pnlPercent(multiple),
+      });
+    });
+    rows.sort(function (a, b) { return b.multiple - a.multiple; });
+    return rows.slice(0, 20);
+  }
+
+  function formatPnl(entries) {
+    var rows = rankPnl(entries);
+    if (!rows.length) return 'Henüz sıralanacak token yok.';
+    var blocks = rows.map(function (row, i) {
+      return (i + 1) + '. $' + row.symbol + ' · ' + networkLabel(row.chain) + '\n'
+        + 'İlk MC ' + formatUsd(row.entryMcap) + ' → ATH ' + formatUsd(row.athMcap) + '\n'
+        + formatPnlMultiple(row.multiple) + ' · ' + formatPnlPercent(row.percent);
+    });
+    return 'PNL · Top 20\nİlk yayındaki MC ile GMGN ATH MC\n\n' + blocks.join('\n\n');
+  }
+
   function sampleAlert() {
     return {
       chain: 'sol',
@@ -906,5 +979,9 @@
     applyDetail: applyDetail,
     sampleAlert: sampleAlert,
     shouldSkipToken: shouldSkipToken,
+    athMcapFromInfo: athMcapFromInfo,
+    pnlMultiple: pnlMultiple,
+    pnlPercent: pnlPercent,
+    formatPnl: formatPnl,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
