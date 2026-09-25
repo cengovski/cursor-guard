@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>GMGN Monitor ayarları</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <main>
+    <h1>GMGN Monitor ayarları</h1>
+    <p class="hint">Giriş yapmış olduğunuz gmgn.ai monitörünü okur. Şifre veya çerez saklamaz. Boş filtre sınırı yoktur.</p>
+    <form id="form">
+      <fieldset>
+        <legend>Telegram</legend>
+        <label>Bot token <input id="botToken" type="password" autocomplete="off" /></label>
+        <label>Sohbet ID <input id="chatId" type="text" autocomplete="off" /></label>
+      </fieldset>
+      <fieldset>
+        <legend>Filtreler</legend>
+        <label>Min piyasa değeri (USD) <input id="minMarketCap" type="text" placeholder="boş = sınır yok" /></label>
+        <label>Min hacim (USD) <input id="minVolume" type="text" placeholder="boş = sınır yok" /></label>
+        <label>Min mutlak giriş (USD) <input id="minInflowAbs" type="text" placeholder="boş = sınır yok" /></label>
+        <label>Min fiyat değişimi (%) <input id="minPriceChange" type="text" placeholder="boş = sınır yok" /></label>
+        <label>Min cüzdan satırı <input id="minWalletRows" type="text" placeholder="boş = sınır yok" /></label>
+        <label class="check"><input id="positiveInflowOnly" type="checkbox" /> Yalnızca pozitif giriş</label>
+      </fieldset>
+      <fieldset>
+        <legend>Tarama</legend>
+        <label>Bekleme (saniye) <input id="dwellSeconds" type="number" min="1" step="1" value="7" /></label>
+        <label>Zaman aralığı
+          <select id="timeframe">
+            <option>1m</option>
+            <option>5m</option>
+            <option>15m</option>
+            <option selected>1h</option>
+            <option>6h</option>
+            <option>24h</option>
+          </select>
+        </label>
+        <div class="group" id="chains">
+          <span>Zincirler</span>
+          <label class="check"><input type="checkbox" data-chain="sol" checked /> SOL</label>
+          <label class="check"><input type="checkbox" data-chain="bsc" checked /> BSC</label>
+          <label class="check"><input type="checkbox" data-chain="robinhood" checked /> Robinhood</label>
+          <label class="check"><input type="checkbox" data-chain="base" checked /> Base</label>
+          <label class="check"><input type="checkbox" data-chain="eth" checked /> ETH</label>
+          <label class="check"><input type="checkbox" data-chain="arc" checked /> ARC</label>
+        </div>
+        <div class="group" id="tabs">
+          <span>Sekmeler</span>
+          <label class="check"><input type="checkbox" data-tab="Track" checked /> Track</label>
+          <label class="check"><input type="checkbox" data-tab="Smart" checked /> Smart</label>
+          <label class="check"><input type="checkbox" data-tab="KOL" checked /> KOL</label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>GMGN</legend>
+        <label>API anahtarı (isteğe bağlı) <input id="gmgnApiKey" type="password" autocomplete="off" /></label>
+        <p class="hint">Anahtar varsa istek X-APIKEY ile gider. Yoksa herkese açık çağrı denenir. İkisi de olmazsa uyarı karttaki alanlarla gider.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Yönlendirme kodları</legend>
+        <p class="hint">Her düğmenin kodu ayrıdır. Boş bırakılırsa ref parametresi eklenmez.</p>
+        <label>TRT Trojan <input id="refTrt" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>TRO Achilles <input id="refTro" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>AXI Axiom <input id="refAxi" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>FMO Fomo <input id="refFmo" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>GM GMGN <input id="refGm" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>PDR Padre <input id="refPdr" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>BLO Bloom <input id="refBlo" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>OKX <input id="refOkx" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>MAE Maestro <input id="refMae" type="text" autocomplete="off" placeholder="nicodotdot" /></label>
+        <label>COV Cove <input id="refCov" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>BAN Banana <input id="refBan" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>STB SolTradingBot <input id="refStb" type="text" autocomplete="off" placeholder="HKkwt0nKl" /></label>
+        <label>PHO Photon <input id="refPho" type="text" autocomplete="off" placeholder="tokenscan" /></label>
+        <label>BNK Bonk <input id="refBnk" type="text" autocomplete="off" placeholder="4tddu" /></label>
+        <label>Based terminal <input id="refBbt" type="text" autocomplete="off" placeholder="babad" /></label>
+        <label>Based Telegram <input id="refBtg" type="text" autocomplete="off" placeholder="babad" /></label>
+      </fieldset>
+      <fieldset>
+        <legend>Veri</legend>
+        <p class="hint">Bir kez paketlenmemiş uzantı klasörünü seçin. Chrome bu klasöre kendiliğinden yazamaz. Sonra aynı klasörü kullanın ve Yenile'ye basın; yeni bir yol yüklemeyin.</p>
+        <button id="pickDir" type="button">Veri klasörünü seç</button>
+        <button id="pnlRefresh" type="button">PnL yenile</button>
+      </fieldset>
+      <div class="row">
+        <button id="save" type="submit">Kaydet</button>
+        <button id="reset" type="button">Havuzu sıfırla</button>
+        <button id="test" type="button">Test mesajı</button>
+      </div>
+    </form>
+    <p id="note"></p>
+  </main>
+  <script src="persist.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

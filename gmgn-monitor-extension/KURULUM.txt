@@ -1,0 +1,15 @@
+GMGN Monitor — kurulum
+
+1. gmgn-monitor-extension.zip dosyasını önce bir klasöre çıkarın. Zip'in kendisini Chrome'a yüklemeyin.
+2. Chrome'da chrome://extensions adresini açın.
+3. Sağ üstten Geliştirici modunu açın.
+4. Paketlenmemiş öğe yükle'ye tıklayın.
+5. İçinde manifest.json olan gmgn-monitor-extension klasörünü seçin.
+6. gmgn.ai hesabınız açıkken uzantı penceresinden Başlat'a basın.
+7. Ayarlar sayfasından bot token, sohbet ID, filtreler, zincirler, sekmeler ve bağlantı şablonlarını düzenleyin.
+8. Ayarlar sayfasında bir kez «Veri klasörünü seç»e basın ve 5. adımdaki gmgn-monitor-extension klasörünü seçin.
+9. Chrome kurulum klasörüne kendiliğinden yazamaz. Aynı klasörü kullanmaya devam edin. Güncellemede yeni bir yol yüklemeyin; chrome://extensions üzerinden Yenile'ye basın.
+
+Ayarlar, havuz, gönderilen uyarı kaydı ve görülen/atlanan adresler gmgn-monitor-data.json dosyasında durur. Tarayıcı kapanınca da kalır.
+
+Uzantı yalnızca ekranda gördüğünüz monitörü okur. Site şifresi veya çerez saklamaz.

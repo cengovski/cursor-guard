@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "GMGN Monitor",
+  "version": "1.0.0",
+  "description": "Açık GMGN monitörünü okur, havuzlar ve Telegram uyarısı gönderir.",
+  "permissions": ["storage", "alarms", "tabs"],
+  "host_permissions": [
+    "https://api.telegram.org/*",
+    "https://gmgn.ai/*",
+    "https://api.coingecko.com/*"
+  ],
+  "background": {
+    "service_worker": "src/worker.js"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "GMGN Monitor"
+  },
+  "options_page": "src/options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://gmgn.ai/*"],
+      "js": ["src/parse.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

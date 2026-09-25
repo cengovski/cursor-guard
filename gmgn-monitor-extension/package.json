@@ -1,0 +1,11 @@
+{
+  "name": "gmgn-monitor-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/parse.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}

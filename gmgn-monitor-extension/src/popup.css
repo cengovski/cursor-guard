@@ -1,0 +1,26 @@
+body {
+  width: 280px;
+  margin: 0;
+  padding: 12px;
+  font: 13px/1.45 system-ui, sans-serif;
+  color: #e8e8e8;
+  background: #161616;
+}
+h1 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+p { margin: 6px 0; }
+.row { display: flex; gap: 8px; }
+button {
+  flex: 1;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: #2f6fed;
+  color: white;
+  cursor: pointer;
+}
+#stop { background: #3a3a3a; }
+.error { color: #ff8d8d; }
+a { color: #8eb6ff; }
