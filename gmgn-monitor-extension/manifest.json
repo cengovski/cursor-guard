@@ -10,7 +10,7 @@
     "https://api.coingecko.com/*"
   ],
   "background": {
-    "service_worker": "src/gmgn-sw.js"
+    "service_worker": "src/worker.js"
   },
   "action": {
     "default_popup": "src/popup.html",
