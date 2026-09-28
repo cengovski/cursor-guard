@@ -48,7 +48,7 @@ function safeError(err, token, apiKey) {
 }
 
 function emptyCursor() {
-  return { running: false, chain: 'sol', tab: '', scanId: 0, error: '', pending: [] };
+  return { running: false, userStopped: null, chain: 'sol', tab: '', scanId: 0, error: '', pending: [] };
 }
 
 async function getLock() {
@@ -74,7 +74,8 @@ async function getSession() {
   var cursor = await getCursor();
   var lock = await getLock();
   return {
-    running: !!cursor.running && !!lock.held,
+    running: GmgnParse.resumeMonitor(cursor),
+    userStopped: cursor.userStopped === true ? true : cursor.userStopped === false ? false : null,
     chain: cursor.chain || 'sol',
     tab: cursor.tab || '',
     tabId: lock.tabId,
@@ -88,6 +89,7 @@ async function saveSession(state) {
   await saveLocal({
     cursor: {
       running: !!state.running,
+      userStopped: state.userStopped === true ? true : state.userStopped === false ? false : null,
       chain: state.chain || 'sol',
       tab: state.tab || '',
       scanId: state.scanId || 0,
@@ -243,12 +245,20 @@ async function migrateSessionCursor() {
 
 async function resumeIfUnlocked() {
   var cursor = await getCursor();
-  if (!cursor.running) return;
+  if (!GmgnParse.resumeMonitor(cursor)) return;
+  if (!cursor.running || cursor.userStopped !== false) {
+    cursor.running = true;
+    cursor.userStopped = false;
+    await saveLocal({ cursor: cursor });
+  }
   var lock = await getLock();
-  if (lock.held) return;
-  await saveLock({ held: true, tabId: null });
+  if (!lock.held) await saveLock({ held: true, tabId: lock.tabId });
   ensureAlarm();
-  await openOrFocus(await getSession());
+  await deliverUnsent();
+  var session = await getSession();
+  var tab = await getManagedTab(session);
+  if (tab && ports.get(tab.id)) return;
+  await openOrFocus(session);
 }
 
 function filtersFrom(settings) {
@@ -554,12 +564,9 @@ async function getRwaIndex() {
   return rwaRefresh;
 }
 
-async function onChainDone(msg) {
-  var session = await getSession();
-  if (!session.running || msg.scanId !== session.scanId) return;
+async function sendUnseen(merged, session) {
   var settings = await getSettings();
   var local = await getLocal();
-  var merged = GmgnParse.mergeByAddress((session.pending || []).map(function (row) { return row.card; }));
   var rwaIndex = emptyRwaPlatforms();
   try { rwaIndex = await getRwaIndex(); } catch (e) { rwaIndex = emptyRwaPlatforms(); }
   if (!settings.botToken || !settings.chatId) {
@@ -601,11 +608,37 @@ async function onChainDone(msg) {
       await saveLocal({ seen: local.seen, alertsSent: local.alertsSent, alertLog: local.alertLog });
     } catch (e) {
       session.error = safeError(e, settings.botToken, settings.gmgnApiKey);
+      await saveSession(session);
     }
   }
+  return session;
+}
+
+async function deliverUnsent() {
+  var local = await getLocal();
+  var rows = GmgnParse.unsentPoolRows(local.pool, local.seen);
+  if (!rows.length) return;
+  var cards = rows.map(function (row) {
+    return Object.assign({}, row.card || {}, {
+      chain: row.chain,
+      address: row.address,
+      tab: row.tab || (row.card && row.card.tab) || '',
+    });
+  });
+  var session = await getSession();
+  await sendUnseen(GmgnParse.mergeByAddress(cards), session);
+}
+
+async function onChainDone(msg) {
+  var session = await getSession();
+  if (!session.running || msg.scanId !== session.scanId) return;
+  var settings = await getSettings();
+  var merged = GmgnParse.mergeByAddress((session.pending || []).map(function (row) { return row.card; }));
+  session = await sendUnseen(merged, session);
   var next = GmgnParse.nextChain(session.chain, settings.chains);
   if (!next) {
     session.running = false;
+    session.userStopped = true;
     session.error = 'En az bir zincir seçin.';
     session.pending = [];
     await saveSession(session);
@@ -658,6 +691,7 @@ async function startScan() {
     return statusPayload();
   }
   session.running = true;
+  session.userStopped = false;
   session.chain = chains[0];
   session.tab = '';
   session.scanId = Date.now();
@@ -672,6 +706,7 @@ async function startScan() {
 async function stopScan() {
   var session = await getSession();
   session.running = false;
+  session.userStopped = true;
   await saveSession(session);
   ports.forEach(function (port) {
     try { port.postMessage({ type: 'STOP' }); } catch (e) { /* closed */ }
@@ -1177,6 +1212,8 @@ chrome.alarms.onAlarm.addListener(function (alarm) {
     enqueue(async function () {
       var session = await getSession();
       if (!session.running) return;
+      await deliverUnsent();
+      session = await getSession();
       var tab = await getManagedTab(session);
       if (tab && ports.get(tab.id)) return;
       await openOrFocus(session);
@@ -1198,6 +1235,9 @@ chrome.alarms.onAlarm.addListener(function (alarm) {
 });
 
 ensureAlarm();
+chrome.runtime.onStartup.addListener(function () {
+  enqueue(function () { return resumeIfUnlocked(); });
+});
 enqueue(async function () {
   await migrateSessionCursor();
   await syncWithFile();

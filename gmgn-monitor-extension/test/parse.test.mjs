@@ -522,3 +522,19 @@ test('user submits and repeated addresses are dropped inside 8 seconds', () => {
   assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000 + 1000), false);
   assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000 + 8000), true);
 });
+
+test('pool rows missing from seen are still unsent, and a dead worker is not Durdur', () => {
+  const pool = [
+    { chain: 'sol', address: 'sent', timestamp: 1, card: { symbol: 'OLD' } },
+    { chain: 'sol', address: 'new', timestamp: 2, card: { symbol: 'NEW' } },
+    { chain: 'sol', address: 'new', timestamp: 3, card: { symbol: 'NEW' } },
+    { chain: 'robinhood', address: 'skip', timestamp: 4, card: { symbol: 'RWA' } },
+  ];
+  const rows = api.unsentPoolRows(pool, { 'sol:sent': true, 'robinhood:skip': 'skip' });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].address, 'new');
+  assert.equal(api.resumeMonitor({ running: false, userStopped: true, scanId: 5 }), false);
+  assert.equal(api.resumeMonitor({ running: false, userStopped: null, scanId: 1790619675401 }), true);
+  assert.equal(api.resumeMonitor({ running: true, userStopped: false, scanId: 1 }), true);
+  assert.equal(api.resumeMonitor({ running: false, userStopped: null, scanId: 0 }), false);
+});

@@ -1200,6 +1200,27 @@
     return next;
   }
 
+  function unsentPoolRows(pool, seen) {
+    var picked = {};
+    var out = [];
+    (pool || []).forEach(function (row) {
+      if (!row || !row.address) return;
+      var key = String(row.chain || '') + ':' + String(row.address);
+      if (seen && seen[key]) return;
+      if (picked[key]) return;
+      picked[key] = true;
+      out.push(row);
+    });
+    return out;
+  }
+
+  function resumeMonitor(cursor) {
+    if (!cursor || cursor.userStopped === true) return false;
+    if (cursor.running) return true;
+    if (cursor.userStopped === false) return true;
+    return !!(cursor.scanId && cursor.userStopped == null);
+  }
+
   function sampleAlert() {
     return {
       chain: 'sol',
@@ -1310,6 +1331,8 @@
     stopAfterAthRefusals: stopAfterAthRefusals,
     pnlStatus: pnlStatus,
     mergeDataFile: mergeDataFile,
+    unsentPoolRows: unsentPoolRows,
+    resumeMonitor: resumeMonitor,
     emptyUserGuard: emptyUserGuard,
     contractAddress: contractAddress,
     admitUser: admitUser,
