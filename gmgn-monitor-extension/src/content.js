@@ -249,10 +249,59 @@
     }
   }
 
+  function visible(el) {
+    if (!el) return false;
+    var rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return false;
+    var style = getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  function loggedOut() {
+    if ((location.href || '').indexOf('/tglogin') !== -1) return true;
+    return visible(document.querySelector('#loginBtn'));
+  }
+
+  function mfaOpen() {
+    return document.querySelectorAll('input[aria-label="Please enter your pin code"]').length >= 6;
+  }
+
+  function loginState() {
+    return {
+      type: 'LOGIN_STATE',
+      href: location.href,
+      loggedOut: loggedOut(),
+      mfa: mfaOpen(),
+    };
+  }
+
+  function submitCode(code) {
+    var digits = String(code || '').replace(/\D/g, '');
+    if (digits.length !== 6) return;
+    var pins = document.querySelectorAll('input[aria-label="Please enter your pin code"]');
+    if (pins.length < 6) return;
+    var desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    if (!desc || !desc.set) return;
+    for (var i = 0; i < 6; i++) {
+      var ch = digits.charAt(i);
+      desc.set.call(pins[i], ch);
+      pins[i].dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch }));
+    }
+    var dialog = document.querySelector('[role="dialog"]') || document.body;
+    var buttons = dialog.querySelectorAll('button');
+    for (var j = 0; j < buttons.length; j++) {
+      if ((buttons[j].textContent || '').trim() === 'Confirm') {
+        buttons[j].click();
+        return;
+      }
+    }
+  }
+
   function onPortMessage(msg) {
     if (!msg) return;
     if (msg.type === 'SCAN') runScan(msg);
     if (msg.type === 'STOP') job += 1;
+    if (msg.type === 'SUBMIT_CODE') submitCode(msg.code);
   }
 
   function connect() {
@@ -271,13 +320,16 @@
         if (!currentPort) connect();
       }, 500);
     });
-    port.postMessage({
+    port.postMessage(Object.assign(loginState(), {
       type: 'HELLO',
-      href: location.href,
       scanning: scanning,
       scanId: activeScanId,
-    });
+    }));
   }
+
+  setInterval(function () {
+    post(loginState());
+  }, 20000);
 
   connect();
 })();

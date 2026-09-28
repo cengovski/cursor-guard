@@ -22,7 +22,12 @@ var DEFAULT_SETTINGS = {
   positiveInflowOnly: false,
   dwellSeconds: 7,
   timeframe: '1h',
-  chains: { sol: true, bsc: true, robinhood: true, base: true, eth: true, arc: true },
+  chains: {
+    sol: true, bsc: true, robinhood: true, base: true, eth: true, arbitrum: true,
+    stable: true, arc: true, xlayer: true, hyperevm: true, megaeth: true, monad: true, tron: true,
+  },
+  dmUser: 'Dzengoat',
+  dmChatId: '',
   tabs: { Track: true, Smart: true, KOL: true },
   gmgnApiKey: '',
   refs: {
@@ -325,7 +330,10 @@ async function getManagedTab(session) {
       /* tab closed */
     }
   }
-  var tabs = await chrome.tabs.query({ url: 'https://gmgn.ai/monitor*' });
+  var tabs = await chrome.tabs.query({ url: ['https://gmgn.ai/monitor*', 'https://gmgn.ai/tglogin*'] });
+  for (var i = 0; i < tabs.length; i++) {
+    if ((tabs[i].url || '').indexOf('/tglogin') !== -1) return tabs[i];
+  }
   return tabs[0] || null;
 }
 
@@ -353,6 +361,7 @@ async function openOrFocus(session) {
   }
   session.tabId = tab.id;
   await saveSession(session);
+  if ((tab.url || '').indexOf('/tglogin') !== -1) return;
   await chrome.tabs.update(tab.id, { active: true });
   try {
     await chrome.windows.update(tab.windowId, { focused: true });
@@ -374,11 +383,233 @@ async function openOrFocus(session) {
   await chrome.tabs.reload(tab.id);
 }
 
+function loginHref(href) {
+  return String(href || '').indexOf('/tglogin') !== -1;
+}
+
+function emptyLink() {
+  return {
+    down: false,
+    downStreak: 0,
+    groupDownSent: false,
+    dmDownSent: false,
+    notifiedMfa: false,
+    linkState: '',
+    tgOffset: 0,
+    tgBooted: false,
+  };
+}
+
+async function getLink() {
+  var data = await chrome.storage.session.get('link');
+  return Object.assign(emptyLink(), data.link || {});
+}
+
+async function saveLink(link) {
+  await chrome.storage.session.set({ link: link });
+}
+
+async function notifyChat(token, chatId, text) {
+  if (!token || !chatId || !text) return false;
+  try {
+    await sendTelegram(token, chatId, text);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function rememberDm(settings, chatId) {
+  var id = String(chatId || '');
+  if (!id) return '';
+  if (String(settings.dmChatId || '') === id) return id;
+  settings.dmChatId = id;
+  var stored = await chrome.storage.local.get('settings');
+  var raw = Object.assign({}, stored.settings || {}, { dmChatId: id });
+  await saveLocal({ settings: normalizeSettings(raw) });
+  return id;
+}
+
+async function resolveDm(settings) {
+  if (settings.dmChatId) return String(settings.dmChatId);
+  var user = String(settings.dmUser || '').replace(/^@/, '').trim();
+  if (!settings.botToken || !user) return '';
+  var res = await fetch('https://api.telegram.org/bot' + settings.botToken + '/getChat?chat_id=' + encodeURIComponent('@' + user));
+  var data = await res.json();
+  if (!data.ok || !data.result || data.result.id == null) return '';
+  return rememberDm(settings, data.result.id);
+}
+
+async function noteConnection(msg) {
+  msg = msg || {};
+  var href = msg.href || '';
+  var out = !!msg.loggedOut || loginHref(href);
+  var mfa = !!msg.mfa;
+  var settings = await getSettings();
+  var link = await getLink();
+  if (!out && !mfa) {
+    if (!link.down && !link.downStreak) return;
+    link.downStreak = 0;
+    if (link.down) {
+      await notifyChat(settings.botToken, settings.chatId, 'GMGN bağlantısı açıldı.');
+      var upId = settings.dmChatId || '';
+      if (!upId) {
+        try { upId = await resolveDm(settings); } catch (e) { upId = ''; }
+      }
+      if (upId) await notifyChat(settings.botToken, upId, 'GMGN bağlantısı açıldı.');
+      link.down = false;
+      link.groupDownSent = false;
+      link.dmDownSent = false;
+      link.notifiedMfa = false;
+      link.linkState = '';
+    }
+    await saveLink(link);
+    return;
+  }
+  if (out) {
+    link.downStreak = loginHref(href) ? 2 : (Number(link.downStreak) || 0) + 1;
+    if (link.downStreak >= 2) {
+      link.down = true;
+      if (!link.groupDownSent) {
+        link.groupDownSent = await notifyChat(settings.botToken, settings.chatId, 'GMGN bağlantısı koptu. Giriş linkini özelden gönder.');
+      }
+      if (!link.dmDownSent) {
+        var dm = '';
+        try { dm = await resolveDm(settings); } catch (e) { dm = ''; }
+        if (dm) {
+          link.dmDownSent = await notifyChat(settings.botToken, dm, 'GMGN bağlantısı koptu. Yeni giriş linkini bu sohbete gönder. Email kodu istenirse 6 haneyi de yaz.');
+        }
+      }
+    }
+  }
+  if (mfa) {
+    link.linkState = 'code';
+    if (!link.notifiedMfa) {
+      var codeId = settings.dmChatId || '';
+      if (!codeId) {
+        try { codeId = await resolveDm(settings); } catch (e) { codeId = ''; }
+      }
+      if (codeId) {
+        link.notifiedMfa = await notifyChat(settings.botToken, codeId, 'Email doğrulama kodunu bu sohbete yaz.');
+      }
+    }
+  }
+  await saveLink(link);
+}
+
+function isDmMessage(message, settings) {
+  if (!message || !message.chat || message.chat.type !== 'private') return false;
+  if (settings.dmChatId && String(message.chat.id) === String(settings.dmChatId)) return true;
+  var want = String(settings.dmUser || '').replace(/^@/, '').toLowerCase();
+  var got = String(message.chat.username || (message.from && message.from.username) || '').toLowerCase();
+  return !!want && got === want;
+}
+
+function loginUrlFrom(text) {
+  var matched = String(text || '').match(/https:\/\/gmgn\.ai\/tglogin[^\s<>"']*/i);
+  if (!matched) return '';
+  return matched[0].replace(/[),.;]+$/, '');
+}
+
+async function openLogin(url) {
+  if (url.indexOf('https://gmgn.ai/tglogin') !== 0) return;
+  var session = await getSession();
+  var tab = await getManagedTab(session);
+  if (!tab) {
+    var tabs = await chrome.tabs.query({ url: 'https://gmgn.ai/*' });
+    tab = tabs[0] || null;
+  }
+  if (tab) {
+    if (session.running) {
+      session.tabId = tab.id;
+      await saveSession(session);
+    }
+    await chrome.tabs.update(tab.id, { url: url, active: true });
+    return;
+  }
+  var created = await chrome.tabs.create({ url: url, active: true });
+  if (session.running) {
+    session.tabId = created.id;
+    await saveSession(session);
+  }
+}
+
+async function submitCodeToTab(code) {
+  var session = await getSession();
+  var tab = await getManagedTab(session);
+  var port = tab && ports.get(tab.id);
+  if (!port) {
+    var pages = await chrome.tabs.query({ url: 'https://gmgn.ai/tglogin*' });
+    for (var i = 0; i < pages.length; i++) {
+      port = ports.get(pages[i].id);
+      if (port) break;
+    }
+  }
+  if (!port) return;
+  try { port.postMessage({ type: 'SUBMIT_CODE', code: code }); } catch (e) { /* closed */ }
+}
+
+var lastPoll = 0;
+
+async function pollDm() {
+  var settings = await getSettings();
+  if (!settings.botToken) return;
+  if (Date.now() - lastPoll < 15000) return;
+  lastPoll = Date.now();
+  var link = await getLink();
+  var offset = Number(link.tgOffset) || 0;
+  var url = 'https://api.telegram.org/bot' + settings.botToken + '/getUpdates?timeout=0';
+  if (offset) url += '&offset=' + encodeURIComponent(String(offset));
+  var res = await fetch(url);
+  var data = await res.json();
+  if (!data.ok || !Array.isArray(data.result)) return;
+  var next = offset;
+  for (var i = 0; i < data.result.length; i++) {
+    var updateId = Number(data.result[i].update_id) || 0;
+    if (updateId + 1 > next) next = updateId + 1;
+  }
+  if (!link.tgBooted) {
+    link.tgBooted = true;
+    link.tgOffset = next;
+    await saveLink(link);
+    return;
+  }
+  for (var j = 0; j < data.result.length; j++) {
+    var message = data.result[j].message;
+    if (!isDmMessage(message, settings)) continue;
+    if (message.chat && message.chat.id != null) await rememberDm(settings, message.chat.id);
+    var text = String(message.text || '').trim();
+    var login = loginUrlFrom(text);
+    if (login) {
+      link.linkState = 'link';
+      await openLogin(login);
+      continue;
+    }
+    if (link.linkState === 'code' && /^\d{6}$/.test(text)) {
+      await submitCodeToTab(text);
+      link.linkState = 'link';
+    }
+  }
+  link.tgOffset = next;
+  await saveLink(link);
+}
+
+async function acceptLoginEvent(port, msg) {
+  var tabId = port.sender && port.sender.tab && port.sender.tab.id;
+  var session = await getSession();
+  var mine = session.tabId == null || tabId == null || tabId === session.tabId || loginHref(msg && msg.href);
+  if (!mine) return;
+  await noteConnection(msg);
+  try { await pollDm(); } catch (e) { /* poll again on the next tick */ }
+}
+
 async function onHello(port, msg) {
+  await acceptLoginEvent(port, msg);
   var session = await getSession();
   if (!session.running) return;
   var tabId = port.sender && port.sender.tab && port.sender.tab.id;
   if (session.tabId != null && tabId != null && tabId !== session.tabId) return;
+  if (loginHref(msg.href) || msg.loggedOut) return;
   var pageChain = chainFromHref(msg.href || '');
   if (pageChain !== session.chain) {
     if (tabId != null) await chrome.tabs.update(tabId, { url: monitorUrl(session.chain) });
@@ -627,6 +858,7 @@ async function onChainDone(msg) {
 async function onPortMessage(port, msg) {
   if (!msg || !msg.type) return;
   if (msg.type === 'HELLO') return onHello(port, msg);
+  if (msg.type === 'LOGIN_STATE') return acceptLoginEvent(port, msg);
   var session = await getSession();
   if (msg.scanId != null && msg.scanId !== session.scanId) return;
   if (msg.type === 'TAB_BEGIN') {
@@ -734,7 +966,10 @@ async function handleMessage(msg) {
   if (msg.type === 'STOP') return stopScan();
   if (msg.type === 'GET_SETTINGS') return { ok: true, settings: await getSettings() };
   if (msg.type === 'SAVE_SETTINGS') {
+    var prev = await getSettings();
     var next = normalizeSettings(msg.settings);
+    if (!next.dmChatId) next.dmChatId = prev.dmChatId || '';
+    if (!msg.settings || !msg.settings.dmUser) next.dmUser = prev.dmUser || next.dmUser;
     await saveLocal({ settings: next });
     return { ok: true, settings: next };
   }
@@ -750,9 +985,11 @@ async function handleMessage(msg) {
 chrome.alarms.onAlarm.addListener(function (alarm) {
   if (alarm.name !== 'gmgn-keepalive') return;
   enqueue(async function () {
+    try { await pollDm(); } catch (e) { /* keep the scan alive */ }
     var session = await getSession();
     if (!session.running) return;
     var tab = await getManagedTab(session);
+    if (tab && loginHref(tab.url || '')) return;
     if (tab && ports.get(tab.id)) return;
     await openOrFocus(session);
   });
@@ -763,4 +1000,9 @@ enqueue(async function () {
   await migrateSessionCursor();
   await syncWithFile();
   await resumeIfUnlocked();
+  try { await pollDm(); } catch (e) { /* offset catch-up retries later */ }
+  try {
+    var boot = await getSettings();
+    if (!boot.dmChatId) await resolveDm(boot);
+  } catch (e) { /* private chat is resolved again when the link drops */ }
 });
