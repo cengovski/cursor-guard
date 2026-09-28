@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>GMGN Monitor</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <h1>GMGN Monitor</h1>
+  <div class="row">
+    <button id="start" type="button">Başlat</button>
+    <button id="stop" type="button">Durdur</button>
+  </div>
+  <p>Durum: <span id="status">—</span></p>
+  <p>Zincir: <span id="chain">—</span></p>
+  <p>Sekme: <span id="tab">—</span></p>
+  <p>Havuz: <span id="pool">0</span></p>
+  <p>Gönderilen uyarı: <span id="alerts">0</span></p>
+  <p>Son hata: <span id="error" class="error"></span></p>
+  <p><a id="options" href="#">Ayarlar</a></p>
+  <script src="popup.js"></script>
+</body>
+</html>
