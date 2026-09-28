@@ -430,6 +430,38 @@ test('pnl list comes from seen in the data file, not alertLog', () => {
   assert.equal(kept.seen['sol:aaa'], true);
   assert.equal(kept.pool.length, 2);
   assert.equal(kept.pnlAth, undefined);
+  assert.equal(kept.alertLog, undefined);
+});
+
+test('sent csv dedups by chain and address and the data file drops the alert transcript', () => {
+  const raw = '{"savedAt":1,"alertLog":[{"symbol":"OLD","address":"aaa","chain":"sol","at":9,"note":"DO_NOT_KEEP"},{"symbol":"Two, Name","address":"bbb","chain":"base"}],"pool":[{"address":"ccc"}],"seen":{"sol:aaa":true}}';
+  const dropped = api.dropAlertTranscript(raw);
+  assert.equal(dropped.dropped, true);
+  assert.equal(dropped.text.includes('DO_NOT_KEEP'), false);
+  assert.equal(dropped.text.includes('alertLog'), false);
+  const parsed = JSON.parse(dropped.text);
+  assert.equal(parsed.pool.length, 1);
+  assert.equal(parsed.seen['sol:aaa'], true);
+  assert.equal(dropped.seeds.length, 2);
+  assert.equal(dropped.seeds[0].symbol, 'OLD');
+  assert.equal(dropped.seeds[0].address, 'aaa');
+  assert.equal(dropped.seeds[0].chain, 'sol');
+  assert.equal(dropped.seeds[0].at, undefined);
+  const seeded = api.sentSeedRows(dropped.seeds, { 'sol:aaa': true, 'sol:skip': 'skip', 'eth:gone': true }, [
+    { chain: 'eth', address: 'gone', card: { symbol: '$GONE' } },
+  ]);
+  assert.equal(seeded.some((row) => row.address === 'skip'), false);
+  assert.equal(seeded.find((row) => row.address === 'gone').symbol, 'GONE');
+  const csv = api.mergeSentCsv('', seeded);
+  assert.equal(csv.startsWith('symbol,address,chain\n'), true);
+  assert.equal(csv.includes('"Two, Name",bbb,base'), true);
+  const again = api.mergeSentCsv(csv, [{ symbol: 'RENAME', address: 'aaa', chain: 'sol' }]);
+  assert.equal(again, csv);
+  const keys = api.sentKeySet(csv);
+  assert.equal(keys['sol:aaa'], true);
+  assert.equal(keys['base:bbb'], true);
+  assert.equal(keys['RENAME:aaa'], undefined);
+  assert.equal(api.dropAlertTranscript('{"pool":[]}').dropped, false);
 });
 
 test('pnl file keeps saved ATH and ranks only records with both caps', () => {

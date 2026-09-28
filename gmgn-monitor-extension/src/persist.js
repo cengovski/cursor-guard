@@ -1,6 +1,10 @@
 (function (root) {
   var FILE_NAME = 'gmgn-monitor-data.json';
   var PNL_FILE = 'gmgn-monitor-pnl.json';
+  var SENT_FILE = 'gmgn-monitor-sent.csv';
+  var pendingSeeds = [];
+  var alertDropped = false;
+  var sentCache = null;
   var IDB_NAME = 'gmgn-monitor';
   var IDB_STORE = 'fs';
 
@@ -79,6 +83,30 @@
     }
   }
 
+  function parseStoredText(text) {
+    var dropped = (typeof GmgnParse !== 'undefined' && GmgnParse.dropAlertTranscript)
+      ? GmgnParse.dropAlertTranscript(text)
+      : { text: text, seeds: [], dropped: false };
+    if (dropped.dropped) alertDropped = true;
+    if (dropped.seeds && dropped.seeds.length) pendingSeeds = pendingSeeds.concat(dropped.seeds);
+    var parsed = JSON.parse(dropped.text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    delete parsed.alertLog;
+    return parsed;
+  }
+
+  function takeSentSeeds() {
+    var rows = pendingSeeds;
+    pendingSeeds = [];
+    return rows;
+  }
+
+  function takeAlertDropped() {
+    var flag = alertDropped;
+    alertDropped = false;
+    return flag;
+  }
+
   async function readSavedFile() {
     var dir = await dirHandle();
     if (!dir || typeof dir.getFileHandle !== 'function') return { handle: false, file: null };
@@ -87,8 +115,8 @@
       var file = await fh.getFile();
       var text = await file.text();
       if (!text) return { handle: true, file: null };
-      var parsed = JSON.parse(text);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { handle: true, file: null };
+      var parsed = parseStoredText(text);
+      if (!parsed) return { handle: true, file: null };
       return { handle: true, file: parsed };
     } catch (e) {
       return { handle: true, file: null };
@@ -103,9 +131,7 @@
       var file = await handle.getFile();
       var text = await file.text();
       if (!text) return null;
-      var parsed = JSON.parse(text);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-      return parsed;
+      return parseStoredText(text);
     } catch (e) {
       return null;
     }
@@ -114,11 +140,69 @@
   async function writeDataFile(blob) {
     var dir = await dirHandle();
     if (!(await canWrite(dir))) return false;
+    var slim = Object.assign({}, blob || {});
+    delete slim.alertLog;
     var handle = await dir.getFileHandle(FILE_NAME, { create: true });
     var writable = await handle.createWritable();
-    await writable.write(JSON.stringify(blob));
+    await writable.write(JSON.stringify(slim));
     await writable.close();
     return true;
+  }
+
+  async function readSentText() {
+    var dir = await dirHandle();
+    if (!dir || typeof dir.getFileHandle !== 'function') return null;
+    try {
+      var fh = await dir.getFileHandle(SENT_FILE);
+      var file = await fh.getFile();
+      return await file.text();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  async function writeSentText(text) {
+    var dir = await dirHandle();
+    if (!(await canWrite(dir))) return false;
+    var handle = await dir.getFileHandle(SENT_FILE, { create: true });
+    var writable = await handle.createWritable();
+    await writable.write(text);
+    await writable.close();
+    sentCache = null;
+    return true;
+  }
+
+  async function sentKeyCache() {
+    if (sentCache) return sentCache;
+    var text = await readSentText();
+    if (text == null || typeof GmgnParse === 'undefined') return {};
+    sentCache = GmgnParse.sentKeySet(text);
+    return sentCache;
+  }
+
+  async function sentHas(chain, address) {
+    var keys = await sentKeyCache();
+    return !!keys[String(chain || '') + ':' + String(address || '')];
+  }
+
+  async function seedSentCsv(rows) {
+    if (typeof GmgnParse === 'undefined') return false;
+    var text = await readSentText();
+    if (text == null) return false;
+    var before = GmgnParse.sentKeySet(text);
+    var merged = GmgnParse.mergeSentCsv(text, rows || []);
+    var after = GmgnParse.sentKeySet(merged);
+    if (text && Object.keys(before).length === Object.keys(after).length) {
+      sentCache = before;
+      return true;
+    }
+    var ok = await writeSentText(merged);
+    if (ok) sentCache = after;
+    return ok;
+  }
+
+  async function appendSentCsv(row) {
+    return seedSentCsv(row ? [row] : []);
   }
 
   async function readNamedFile(name) {
@@ -154,12 +238,19 @@
   root.GmgnPersist = {
     FILE_NAME: FILE_NAME,
     PNL_FILE: PNL_FILE,
+    SENT_FILE: SENT_FILE,
     localEmpty: localEmpty,
     shouldRestore: shouldRestore,
     rememberDir: rememberDir,
     readSavedFile: readSavedFile,
     readDataFile: readDataFile,
     writeDataFile: writeDataFile,
+    takeSentSeeds: takeSentSeeds,
+    takeAlertDropped: takeAlertDropped,
+    sentHas: sentHas,
+    sentKeyCache: sentKeyCache,
+    seedSentCsv: seedSentCsv,
+    appendSentCsv: appendSentCsv,
     readPnlFile: readPnlFile,
     writePnlFile: writePnlFile,
   };

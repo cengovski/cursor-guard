@@ -121,12 +121,11 @@ async function getSettings() {
 }
 
 async function getLocal() {
-  var data = await chrome.storage.local.get(['pool', 'seen', 'alertsSent', 'alertLog']);
+  var data = await chrome.storage.local.get(['pool', 'seen', 'alertsSent']);
   return {
     pool: Array.isArray(data.pool) ? data.pool : [],
     seen: data.seen && typeof data.seen === 'object' ? data.seen : {},
     alertsSent: Number(data.alertsSent) || 0,
-    alertLog: Array.isArray(data.alertLog) ? data.alertLog : [],
   };
 }
 
@@ -148,7 +147,7 @@ function scheduleMirror() {
 }
 
 async function readBlob() {
-  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'alertLog', 'rwaIndex', 'cursor', 'savedAt', 'tgUpdateOffset', 'athRefreshAt', 'pnlPostedAt']);
+  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'rwaIndex', 'cursor', 'savedAt', 'tgUpdateOffset', 'athRefreshAt', 'pnlPostedAt']);
   var cursor = Object.assign(emptyCursor(), data.cursor || {});
   if (!Array.isArray(cursor.pending)) cursor.pending = [];
   return {
@@ -157,7 +156,6 @@ async function readBlob() {
     pool: Array.isArray(data.pool) ? data.pool : [],
     seen: data.seen && typeof data.seen === 'object' ? data.seen : {},
     alertsSent: Number(data.alertsSent) || 0,
-    alertLog: Array.isArray(data.alertLog) ? data.alertLog : [],
     rwaIndex: data.rwaIndex || null,
     cursor: cursor,
     tgUpdateOffset: data.tgUpdateOffset != null ? Number(data.tgUpdateOffset) || 0 : 0,
@@ -175,7 +173,6 @@ async function writeBlob(blob) {
     pool: Array.isArray(blob.pool) ? blob.pool : [],
     seen: blob.seen && typeof blob.seen === 'object' ? blob.seen : {},
     alertsSent: Number(blob.alertsSent) || 0,
-    alertLog: Array.isArray(blob.alertLog) ? blob.alertLog : [],
     rwaIndex: blob.rwaIndex || null,
     cursor: cursor,
   };
@@ -196,27 +193,51 @@ async function flushMirror() {
   } catch (e) { /* klasör yok */ }
 }
 
+async function markSeenFromCsv() {
+  var keys = await GmgnPersist.sentKeyCache();
+  var data = await chrome.storage.local.get('seen');
+  var seen = data.seen && typeof data.seen === 'object' ? data.seen : {};
+  var changed = false;
+  Object.keys(keys).forEach(function (key) {
+    if (seen[key] === true || seen[key] === 'skip') return;
+    seen[key] = true;
+    changed = true;
+  });
+  if (changed) await chrome.storage.local.set({ seen: seen });
+}
+
 async function syncWithFile() {
   try { await syncPnlFile(); } catch (e) { /* pnl dosyası sonra */ }
   lastRestored = false;
   var local = await readBlob();
   var file = null;
   try { file = await GmgnPersist.readDataFile(); } catch (e) { file = null; }
+  var seeds = GmgnPersist.takeSentSeeds();
+  var dropped = GmgnPersist.takeAlertDropped();
+  try {
+    var seen = Object.assign({}, (file && file.seen) || {}, local.seen || {});
+    var pool = [].concat((file && file.pool) || [], local.pool || []);
+    await GmgnPersist.seedSentCsv(GmgnParse.sentSeedRows(seeds, seen, pool));
+  } catch (e) { /* csv sonra */ }
+  try { await chrome.storage.local.remove('alertLog'); } catch (e) { /* yok */ }
   if (GmgnPersist.shouldRestore(local, file)) {
     await writeBlob(file);
     lastRestored = true;
     if (file && file.pnlAth) {
       try { await GmgnPersist.writeDataFile(GmgnParse.mergeDataFile(file, file)); } catch (e) { /* klasör yok */ }
     }
-    return;
-  }
-  if (GmgnPersist.localEmpty(local)) return;
-  var fileAt = file ? (Number(file.savedAt) || 0) : -1;
-  if (!file || (Number(local.savedAt) || 0) > fileAt) {
-    if (!local.savedAt) {
-      local.savedAt = Date.now();
-      await chrome.storage.local.set({ savedAt: local.savedAt });
+  } else if (!GmgnPersist.localEmpty(local)) {
+    var fileAt = file ? (Number(file.savedAt) || 0) : -1;
+    if (!file || (Number(local.savedAt) || 0) > fileAt) {
+      if (!local.savedAt) {
+        local.savedAt = Date.now();
+        await chrome.storage.local.set({ savedAt: local.savedAt });
+      }
+      try { await GmgnPersist.writeDataFile(await readBlob()); } catch (e) { /* klasör yok */ }
     }
+  }
+  try { await markSeenFromCsv(); } catch (e) { /* csv yok */ }
+  if (dropped) {
     try { await GmgnPersist.writeDataFile(await readBlob()); } catch (e) { /* klasör yok */ }
   }
 }
@@ -576,6 +597,11 @@ async function sendUnseen(merged, session) {
     var item = merged[i];
     var key = item.chain + ':' + item.address;
     if (local.seen[key]) continue;
+    if (await GmgnPersist.sentHas(item.chain, item.address)) {
+      local.seen[key] = true;
+      await saveLocal({ seen: local.seen });
+      continue;
+    }
     if (!GmgnParse.claimGmgnAddress(userGuard, item.chain, item.address, Date.now())) continue;
     if (GmgnParse.shouldSkipToken(item, rwaIndex)) {
       local.seen[key] = 'skip';
@@ -592,20 +618,13 @@ async function sendUnseen(merged, session) {
       await sendTelegram(settings.botToken, settings.chatId, html, markup);
       local.seen[key] = true;
       local.alertsSent += 1;
-      var sentAt = Date.now();
-      var entryMcap = Number(view.mcUsd);
-      if (!(entryMcap > 0)) entryMcap = Number(GmgnParse.parseMoney(view.mcText));
-      var entry = {
-        chain: item.chain,
+      await GmgnPersist.appendSentCsv({
+        symbol: item.symbol || view.symbol || '',
         address: item.address,
-        symbol: item.symbol || '',
-        at: sentAt,
-        sentAt: sentAt,
-      };
-      if (entryMcap > 0) entry.entryMcap = entryMcap;
-      local.alertLog.push(entry);
+        chain: item.chain,
+      });
       session.error = '';
-      await saveLocal({ seen: local.seen, alertsSent: local.alertsSent, alertLog: local.alertLog });
+      await saveLocal({ seen: local.seen, alertsSent: local.alertsSent });
     } catch (e) {
       session.error = safeError(e, settings.botToken, settings.gmgnApiKey);
       await saveSession(session);
@@ -902,7 +921,7 @@ async function fetchAthMcap(chain, address, apiKey) {
 
 async function appendPnlLog(line, view) {
   var data = await chrome.storage.local.get('pnlLog');
-  var lines = Array.isArray(data.pnlLog) ? data.pnlLog.slice(-79) : [];
+  var lines = Array.isArray(data.pnlLog) ? data.pnlLog.slice(-49) : [];
   if (line) lines.push(String(line).slice(0, 300));
   var next = { pnlLog: lines };
   if (view) {

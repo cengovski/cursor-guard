@@ -1179,6 +1179,218 @@
     return Object.assign(base, { kind: 'rank', text: formatPnl(entries) });
   }
 
+  function jsonStringField(obj, name) {
+    var needle = '"' + name + '"';
+    var at = obj.indexOf(needle);
+    if (at < 0) return '';
+    var i = at + needle.length;
+    while (i < obj.length && obj[i] <= ' ') i++;
+    if (obj[i] !== ':') return '';
+    i++;
+    while (i < obj.length && obj[i] <= ' ') i++;
+    if (obj[i] !== '"') return '';
+    i++;
+    var out = '';
+    while (i < obj.length) {
+      var c = obj[i];
+      if (c === '\\') {
+        var n = obj[i + 1];
+        if (n === '"' || n === '\\' || n === '/') out += n;
+        else if (n === 'n') out += '\n';
+        else if (n === 'r') out += '\r';
+        else if (n === 't') out += '\t';
+        else if (n) out += n;
+        i += 2;
+        continue;
+      }
+      if (c === '"') break;
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
+  function scanJsonContainer(src, start) {
+    var seeds = [];
+    var depth = 0;
+    var inStr = false;
+    var esc = false;
+    var objStart = -1;
+    var i = start;
+    for (; i < src.length; i++) {
+      var c = src[i];
+      if (inStr) {
+        if (esc) { esc = false; continue; }
+        if (c === '\\') { esc = true; continue; }
+        if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') { inStr = true; continue; }
+      if (c === '{' || c === '[') {
+        if (c === '{' && depth === 1) objStart = i;
+        depth++;
+        continue;
+      }
+      if (c === '}' || c === ']') {
+        depth--;
+        if (c === '}' && depth === 1 && objStart >= 0) {
+          var obj = src.slice(objStart, i + 1);
+          var address = jsonStringField(obj, 'address');
+          if (address) {
+            seeds.push({
+              symbol: jsonStringField(obj, 'symbol'),
+              address: address,
+              chain: jsonStringField(obj, 'chain'),
+            });
+          }
+          objStart = -1;
+        }
+        if (depth === 0) return { seeds: seeds, end: i + 1 };
+      }
+    }
+    return { seeds: seeds, end: src.length };
+  }
+
+  function dropAlertTranscript(text) {
+    var src = String(text || '');
+    var keyAt = src.indexOf('"alertLog"');
+    if (keyAt < 0) return { text: src, seeds: [], dropped: false };
+    var i = keyAt + 10;
+    while (i < src.length && src[i] <= ' ') i++;
+    if (src[i] !== ':') return { text: src, seeds: [], dropped: false };
+    i++;
+    while (i < src.length && src[i] <= ' ') i++;
+    var seeds = [];
+    if (src[i] === '[' || src[i] === '{') {
+      var scanned = scanJsonContainer(src, i);
+      seeds = scanned.seeds;
+      i = scanned.end;
+    }
+    var cutStart = keyAt;
+    var cutEnd = i;
+    var before = cutStart;
+    while (before > 0 && src[before - 1] <= ' ') before--;
+    var after = cutEnd;
+    while (after < src.length && src[after] <= ' ') after++;
+    if (before > 0 && src[before - 1] === ',') cutStart = before - 1;
+    else if (src[after] === ',') cutEnd = after + 1;
+    return { text: src.slice(0, cutStart) + src.slice(cutEnd), seeds: seeds, dropped: true };
+  }
+
+  function csvCell(value) {
+    var s = value == null ? '' : String(value);
+    if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  function parseSentCsv(text) {
+    var rows = [];
+    var row = [];
+    var cell = '';
+    var inQ = false;
+    var s = String(text || '');
+    function pushRow() {
+      row.push(cell);
+      cell = '';
+      if (row.length > 1 || row[0]) rows.push(row);
+      row = [];
+    }
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (inQ) {
+        if (c === '"') {
+          if (s[i + 1] === '"') { cell += '"'; i++; }
+          else inQ = false;
+        } else cell += c;
+        continue;
+      }
+      if (c === '"') { inQ = true; continue; }
+      if (c === ',') { row.push(cell); cell = ''; continue; }
+      if (c === '\n' || c === '\r') {
+        if (c === '\r' && s[i + 1] === '\n') i++;
+        pushRow();
+        continue;
+      }
+      cell += c;
+    }
+    if (cell || row.length) pushRow();
+    var out = [];
+    rows.forEach(function (cols, idx) {
+      if (!cols || cols.length < 3 || !cols[1]) return;
+      if (idx === 0 && cols[0] === 'symbol' && cols[1] === 'address' && cols[2] === 'chain') return;
+      out.push({ symbol: cols[0], address: cols[1], chain: cols[2] });
+    });
+    return out;
+  }
+
+  function sentKey(chain, address) {
+    return String(chain || '') + ':' + String(address || '');
+  }
+
+  function sentKeySet(textOrRows) {
+    var rows = typeof textOrRows === 'string' || textOrRows == null ? parseSentCsv(textOrRows || '') : textOrRows;
+    var set = {};
+    (rows || []).forEach(function (row) {
+      if (!row || !row.address) return;
+      set[sentKey(row.chain, row.address)] = true;
+    });
+    return set;
+  }
+
+  function formatSentCsv(rows) {
+    var lines = ['symbol,address,chain'];
+    (rows || []).forEach(function (row) {
+      if (!row || !row.address) return;
+      lines.push(csvCell(row.symbol) + ',' + csvCell(row.address) + ',' + csvCell(row.chain));
+    });
+    return lines.join('\n') + '\n';
+  }
+
+  function mergeSentCsv(text, rows) {
+    var existing = parseSentCsv(text);
+    var set = sentKeySet(existing);
+    (rows || []).forEach(function (row) {
+      if (!row || !row.address) return;
+      var key = sentKey(row.chain, row.address);
+      if (set[key]) return;
+      set[key] = true;
+      existing.push({ symbol: row.symbol || '', address: String(row.address), chain: String(row.chain || '') });
+    });
+    return formatSentCsv(existing);
+  }
+
+  function sentSeedRows(alertSeeds, seen, pool) {
+    var out = [];
+    var known = {};
+    function add(row) {
+      if (!row || !row.address) return;
+      var key = sentKey(row.chain, row.address);
+      if (known[key]) return;
+      known[key] = true;
+      out.push({ symbol: String(row.symbol || ''), address: String(row.address), chain: String(row.chain || '') });
+    }
+    (alertSeeds || []).forEach(add);
+    var symbolByKey = {};
+    (pool || []).forEach(function (row) {
+      if (!row || !row.address) return;
+      var key = sentKey(row.chain, row.address);
+      if (symbolByKey[key]) return;
+      var symbol = row.symbol || (row.card && row.card.symbol) || '';
+      if (symbol) symbolByKey[key] = String(symbol).replace(/^\$/, '');
+    });
+    Object.keys(seen || {}).forEach(function (key) {
+      if (seen[key] !== true) return;
+      var cut = key.indexOf(':');
+      if (cut < 0) return;
+      add({
+        chain: key.slice(0, cut),
+        address: key.slice(cut + 1),
+        symbol: symbolByKey[key] || '',
+      });
+    });
+    return out;
+  }
+
   function mergeDataFile(local, file) {
     var next = Object.assign({}, file || {}, local || {});
     next.seen = unionSeen(file && file.seen, local && local.seen);
@@ -1193,9 +1405,7 @@
     });
     next.pool = pool;
     delete next.pnlAth;
-    if (!(local && Array.isArray(local.alertLog) && local.alertLog.length) && file && Array.isArray(file.alertLog)) {
-      next.alertLog = file.alertLog;
-    }
+    delete next.alertLog;
     if (!(local && local.settings) && file) next.settings = file.settings;
     return next;
   }
@@ -1330,6 +1540,13 @@
     athRefusal: athRefusal,
     stopAfterAthRefusals: stopAfterAthRefusals,
     pnlStatus: pnlStatus,
+    dropAlertTranscript: dropAlertTranscript,
+    parseSentCsv: parseSentCsv,
+    sentKey: sentKey,
+    sentKeySet: sentKeySet,
+    formatSentCsv: formatSentCsv,
+    mergeSentCsv: mergeSentCsv,
+    sentSeedRows: sentSeedRows,
     mergeDataFile: mergeDataFile,
     unsentPoolRows: unsentPoolRows,
     resumeMonitor: resumeMonitor,

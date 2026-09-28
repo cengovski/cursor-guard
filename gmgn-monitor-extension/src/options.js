@@ -39,7 +39,7 @@ function note(message, bad) {
 
 function pnlTextFrom(data) {
   var view = data.pnlView || {};
-  var lines = Array.isArray(data.pnlLog) ? data.pnlLog : [];
+  var lines = Array.isArray(data.pnlLog) ? data.pnlLog.slice(-50) : [];
   var head = '';
   if (view.total) head = 'PnL ' + (Number(view.done) || 0) + '/' + view.total;
   if (view.lastError) head += (head ? '\n' : '') + 'Son hata: ' + view.lastError;
