@@ -2,11 +2,11 @@
   var FILE_NAME = 'gmgn-monitor-data.json';
   var PNL_FILE = 'gmgn-monitor-pnl.json';
   var SENT_FILE = 'gmgn-monitor-sent.csv';
+  var IDB_NAME = 'gmgn-monitor';
+  var IDB_STORE = 'fs';
   var pendingSeeds = [];
   var alertDropped = false;
   var sentCache = null;
-  var IDB_NAME = 'gmgn-monitor';
-  var IDB_STORE = 'fs';
 
   function localEmpty(blob) {
     if (!blob || typeof blob !== 'object' || Array.isArray(blob)) return true;
@@ -107,22 +107,6 @@
     return flag;
   }
 
-  async function readSavedFile() {
-    var dir = await dirHandle();
-    if (!dir || typeof dir.getFileHandle !== 'function') return { handle: false, file: null };
-    try {
-      var fh = await dir.getFileHandle(FILE_NAME);
-      var file = await fh.getFile();
-      var text = await file.text();
-      if (!text) return { handle: true, file: null };
-      var parsed = parseStoredText(text);
-      if (!parsed) return { handle: true, file: null };
-      return { handle: true, file: parsed };
-    } catch (e) {
-      return { handle: true, file: null };
-    }
-  }
-
   async function readDataFile() {
     var dir = await dirHandle();
     if (!(await canWrite(dir))) return null;
@@ -142,6 +126,7 @@
     if (!(await canWrite(dir))) return false;
     var slim = Object.assign({}, blob || {});
     delete slim.alertLog;
+    delete slim.screenLog;
     var handle = await dir.getFileHandle(FILE_NAME, { create: true });
     var writable = await handle.createWritable();
     await writable.write(JSON.stringify(slim));
@@ -205,36 +190,6 @@
     return seedSentCsv(row ? [row] : []);
   }
 
-  async function readNamedFile(name) {
-    var dir = await dirHandle();
-    if (!dir || typeof dir.getFileHandle !== 'function') return { handle: false, file: null };
-    try {
-      var fh = await dir.getFileHandle(name);
-      var file = await fh.getFile();
-      var text = await file.text();
-      if (!text) return { handle: true, file: null };
-      var parsed = JSON.parse(text);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { handle: true, file: null };
-      return { handle: true, file: parsed };
-    } catch (e) {
-      return { handle: true, file: null };
-    }
-  }
-
-  function readPnlFile() {
-    return readNamedFile(PNL_FILE);
-  }
-
-  async function writePnlFile(map) {
-    var dir = await dirHandle();
-    if (!(await canWrite(dir))) return false;
-    var handle = await dir.getFileHandle(PNL_FILE, { create: true });
-    var writable = await handle.createWritable();
-    await writable.write(JSON.stringify(map && typeof map === 'object' ? map : {}));
-    await writable.close();
-    return true;
-  }
-
   root.GmgnPersist = {
     FILE_NAME: FILE_NAME,
     PNL_FILE: PNL_FILE,
@@ -242,7 +197,6 @@
     localEmpty: localEmpty,
     shouldRestore: shouldRestore,
     rememberDir: rememberDir,
-    readSavedFile: readSavedFile,
     readDataFile: readDataFile,
     writeDataFile: writeDataFile,
     takeSentSeeds: takeSentSeeds,
@@ -251,7 +205,5 @@
     sentKeyCache: sentKeyCache,
     seedSentCsv: seedSentCsv,
     appendSentCsv: appendSentCsv,
-    readPnlFile: readPnlFile,
-    writePnlFile: writePnlFile,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

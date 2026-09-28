@@ -315,196 +315,6 @@ test('telegram keyboard rows have at most 3 buttons', () => {
   assert.equal(sol[1].map((b) => b.text).join(), '🤖 BBT');
 });
 
-test('pnl multiple, percent, sort, and top 20 text', () => {
-  assert.equal(api.pnlMultiple(100000, 1500000), 15);
-  assert.equal(api.pnlPercent(15), 1400);
-  assert.equal(api.pnlMultiple(100000, 40000), 0.4);
-  assert.equal(api.pnlPercent(0.4), -60);
-  assert.equal(api.pnlMultiple(0, 10), null);
-  assert.equal(api.athMcapFromInfo({ ath_market_cap: 5, ath_price: 9, price: { price: 1 }, market_cap: 2 }), 5);
-  assert.equal(api.athMcapFromInfo({ ath_price: 4, price: { price: 2 }, market_cap: 100 }), 200);
-  assert.equal(api.athMcapFromInfo({ ath_price: 4, price: { price: 2 } }), null);
-  assert.equal(api.athMcapFromInfo({ token: { ath_price: 3, price: 1, usd_market_cap: 10 } }), 30);
-  assert.equal(api.formatPnl([
-    { chain: 'sol', address: 'low', symbol: 'SMALL', entryMcap: 100000, athMcap: 40000 },
-    { chain: 'eth', address: 'skip', symbol: 'NOATH', entryMcap: 50000 },
-    { chain: 'sol', address: 'high', symbol: 'TICKER', entryMcap: 100000, athMcap: 1500000 },
-    { chain: 'base', address: 'poolish', symbol: 'POOL', athMcap: 999 },
-  ]), [
-    'PNL · Top 20',
-    'İlk yayındaki MC ile GMGN ATH MC',
-    '',
-    '1. $TICKER · SOLANA',
-    'İlk MC $100K → ATH $1.5M',
-    '15.0x · +1400%',
-    '',
-    '2. $SMALL · SOLANA',
-    'İlk MC $100K → ATH $40K',
-    '0.4x · -60%',
-  ].join('\n'));
-  assert.equal(api.formatPnl([]), 'Henüz sıralanacak token yok.');
-  assert.equal(api.formatPnl([{ chain: 'sol', address: 'x', symbol: 'BARE', entryMcap: 1 }]), 'Henüz sıralanacak token yok.');
-  var many = [];
-  for (var i = 0; i < 21; i++) {
-    many.push({ chain: 'sol', address: String(i), symbol: 'T' + i, entryMcap: 100, athMcap: 100 * (i + 1) });
-  }
-  var lines = api.formatPnl(many).split('\n').filter(function (line) { return /^\d+\. \$/.test(line); });
-  assert.equal(lines.length, 20);
-  assert.equal(lines[0], '1. $T20 · SOLANA');
-  assert.equal(lines[19].startsWith('20. $T1 · '), true);
-});
-
-test('backfill entry mcap from the earliest pool card for seen sends', () => {
-  const pool = [
-    { chain: 'sol', address: 'aaa', timestamp: 50, card: { mcUsd: 9000, symbol: 'LATE' } },
-    { chain: 'sol', address: 'aaa', timestamp: 10, card: { mcUsd: 1000, symbol: '$EARLY' } },
-    { chain: 'base', address: 'new', timestamp: 30, card: { mcUsd: 250000, symbol: 'NEW' } },
-    { chain: 'sol', address: 'skip', timestamp: 1, card: { mcUsd: 1, symbol: 'SKIP' } },
-  ];
-  const seen = { 'sol:aaa': true, 'base:new': true, 'sol:skip': 'skip', 'eth:gone': true };
-  const alertLog = [
-    { chain: 'sol', address: 'aaa', symbol: 'OLD', at: 1 },
-    { chain: 'sol', address: 'keep', symbol: 'KEEP', entryMcap: 50 },
-  ];
-  const next = api.backfillPnlRecords(seen, pool, alertLog);
-  assert.equal(next[0].entryMcap, 1000);
-  assert.equal(next[0].symbol, 'EARLY');
-  assert.equal(next[0].at, 1);
-  assert.equal(next[1].entryMcap, 50);
-  assert.equal(next[1].symbol, 'KEEP');
-  assert.equal(next[2].chain, 'base');
-  assert.equal(next[2].address, 'new');
-  assert.equal(next[2].symbol, 'NEW');
-  assert.equal(next[2].entryMcap, 250000);
-  assert.equal(next[2].at, 30);
-  assert.equal(next[2].sentAt, 30);
-  assert.equal(next.some((row) => row.symbol === 'SKIP' || row.address === 'gone'), false);
-  assert.equal(api.backfillPnlRecords(seen, pool, next), next);
-});
-
-test('pnl list comes from seen in the data file, not alertLog', () => {
-  const file = {
-    seen: { 'sol:aaa': true, 'sol:skip': 'skip' },
-    pool: [
-      { chain: 'sol', address: 'aaa', timestamp: 50, card: { mcUsd: 9000, symbol: 'LATE' } },
-      { chain: 'sol', address: 'aaa', timestamp: 10, card: { mcUsd: 100000, symbol: 'EARLY' } },
-    ],
-  };
-  const storage = {
-    seen: {},
-    pool: [],
-    alertLog: [{ chain: 'sol', address: 'zzz', symbol: 'LOG', entryMcap: 5, athMcap: 50 }],
-  };
-  const waiting = api.pnlStatus({ handle: true, fileRead: true, file, storage, ath: {} });
-  assert.equal(waiting.kind, 'wait');
-  assert.equal(waiting.fromFile, 1);
-  assert.equal(waiting.text, 'Dosyadan 1 token yüklendi.');
-  assert.equal(waiting.text.includes('Henüz sıralanacak token yok.'), false);
-  assert.equal(waiting.entries.length, 1);
-  assert.equal(waiting.entries[0].symbol, 'EARLY');
-  assert.equal(waiting.entries[0].entryMcap, 100000);
-  const ranked = api.pnlStatus({
-    handle: true,
-    fileRead: true,
-    file,
-    storage,
-    ath: { 'sol:aaa': { athMcap: 1500000, athFetchedAt: 1 } },
-  });
-  assert.equal(ranked.kind, 'rank');
-  assert.equal(ranked.text.includes('$EARLY'), true);
-  assert.equal(ranked.text.includes('Henüz sıralanacak token yok.'), false);
-  assert.equal(ranked.text.includes('$LOG'), false);
-  const none = api.pnlStatus({
-    handle: true,
-    fileRead: true,
-    file: { seen: {}, pool: [] },
-    storage: { seen: { 'sol:skip': 'skip' }, pool: [], alertLog: storage.alertLog },
-    ath: {},
-  });
-  assert.equal(none.kind, 'empty');
-  assert.equal(none.text, 'Henüz sıralanacak token yok.');
-  const missing = api.pnlStatus({ handle: false, fileRead: false, file: null, storage, ath: {} });
-  assert.equal(missing.kind, 'no-folder');
-  assert.equal(missing.text, 'Veri klasörü seçilmedi.');
-  const kept = api.mergeDataFile({ seen: {}, pool: [], alertLog: [], pnlAth: { 'sol:aaa': { athMcap: 1 } } }, file);
-  assert.equal(kept.seen['sol:aaa'], true);
-  assert.equal(kept.pool.length, 2);
-  assert.equal(kept.pnlAth, undefined);
-  assert.equal(kept.alertLog, undefined);
-});
-
-test('sent csv dedups by chain and address and the data file drops the alert transcript', () => {
-  const raw = '{"savedAt":1,"alertLog":[{"symbol":"OLD","address":"aaa","chain":"sol","at":9,"note":"DO_NOT_KEEP"},{"symbol":"Two, Name","address":"bbb","chain":"base"}],"pool":[{"address":"ccc"}],"seen":{"sol:aaa":true}}';
-  const dropped = api.dropAlertTranscript(raw);
-  assert.equal(dropped.dropped, true);
-  assert.equal(dropped.text.includes('DO_NOT_KEEP'), false);
-  assert.equal(dropped.text.includes('alertLog'), false);
-  const parsed = JSON.parse(dropped.text);
-  assert.equal(parsed.pool.length, 1);
-  assert.equal(parsed.seen['sol:aaa'], true);
-  assert.equal(dropped.seeds.length, 2);
-  assert.equal(dropped.seeds[0].symbol, 'OLD');
-  assert.equal(dropped.seeds[0].address, 'aaa');
-  assert.equal(dropped.seeds[0].chain, 'sol');
-  assert.equal(dropped.seeds[0].at, undefined);
-  const seeded = api.sentSeedRows(dropped.seeds, { 'sol:aaa': true, 'sol:skip': 'skip', 'eth:gone': true }, [
-    { chain: 'eth', address: 'gone', card: { symbol: '$GONE' } },
-  ]);
-  assert.equal(seeded.some((row) => row.address === 'skip'), false);
-  assert.equal(seeded.find((row) => row.address === 'gone').symbol, 'GONE');
-  const csv = api.mergeSentCsv('', seeded);
-  assert.equal(csv.startsWith('symbol,address,chain\n'), true);
-  assert.equal(csv.includes('"Two, Name",bbb,base'), true);
-  const again = api.mergeSentCsv(csv, [{ symbol: 'RENAME', address: 'aaa', chain: 'sol' }]);
-  assert.equal(again, csv);
-  const keys = api.sentKeySet(csv);
-  assert.equal(keys['sol:aaa'], true);
-  assert.equal(keys['base:bbb'], true);
-  assert.equal(keys['RENAME:aaa'], undefined);
-  assert.equal(api.dropAlertTranscript('{"pool":[]}').dropped, false);
-});
-
-test('pnl file keeps saved ATH and ranks only records with both caps', () => {
-  const existing = {
-    'sol:aaa': { symbol: 'OLD', entryMcap: 10, athMcap: 150, multiple: 15, pct: 1400, updatedAt: 5, lastError: '' },
-    'sol:bad': { symbol: 'BAD', entryMcap: 20, athMcap: null, multiple: null, pct: null, updatedAt: 4, lastError: 'ATH yok' },
-  };
-  const map = api.mergePnlMap(existing, [{ chain: 'sol', address: 'aaa', symbol: 'EARLY', entryMcap: 100 }]);
-  assert.equal(map['sol:aaa'].athMcap, 150);
-  assert.equal(map['sol:aaa'].entryMcap, 100);
-  assert.equal(map['sol:aaa'].symbol, 'EARLY');
-  assert.equal(map['sol:aaa'].multiple, 1.5);
-  assert.equal(map['sol:aaa'].pct, 50);
-  assert.equal(map['sol:bad'].lastError, 'ATH yok');
-  assert.equal(map['sol:bad'].athMcap, null);
-  const merged = api.mergePnlFromSources(
-    existing,
-    { seen: { 'sol:aaa': true }, pool: [{ chain: 'sol', address: 'aaa', timestamp: 1, card: { mcUsd: 100, symbol: 'EARLY' } }], pnlAth: { 'sol:aaa': { athMcap: 9 } } },
-    { seen: {}, pool: [] }
-  );
-  assert.equal(merged.map['sol:aaa'].athMcap, 150);
-  assert.equal(merged.fromFile, 1);
-  const fresh = api.mergePnlMap({}, [{ chain: 'sol', address: 'bbb', symbol: 'NEW', entryMcap: 40 }]);
-  api.absorbLegacyAth(fresh, { 'sol:bbb': { athMcap: 80, athFetchedAt: 3 } });
-  assert.equal(fresh['sol:bbb'].athMcap, 80);
-  assert.equal(fresh['sol:bbb'].multiple, 2);
-  const text = api.formatPnl(api.pnlRecords(map));
-  assert.equal(text.includes('$EARLY'), true);
-  assert.equal(text.includes('$BAD'), false);
-  assert.equal(text.includes('Henüz sıralanacak token yok.'), false);
-  const progress = api.pnlProgress(map);
-  assert.equal(progress.total, 2);
-  assert.equal(progress.ranked, 1);
-  assert.equal(progress.lastError, 'ATH yok');
-  assert.equal(api.includeAthTarget({ entryMcap: 10, athMcap: null, lastError: 'GMGN 403' }, false), true);
-  assert.equal(api.includeAthTarget({ entryMcap: 10, athMcap: 20, lastError: '' }, false), false);
-  assert.equal(api.includeAthTarget({ entryMcap: 10, athMcap: 20, lastError: 'GMGN 403' }, false), true);
-  assert.equal(api.athRefusal('GMGN 403'), true);
-  assert.equal(api.athRefusal('ATH yok'), false);
-  assert.equal(api.stopAfterAthRefusals(4), false);
-  assert.equal(api.stopAfterAthRefusals(5), true);
-});
-
 test('RWA and tokenized stocks are skipped by address or issuer marker, not by ticker alone', () => {
   const listed = { solana: { XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3: true }, ethereum: { '0xabc': true }, 'binance-smart-chain': {}, base: {} };
   assert.equal(api.shouldSkipToken({ chain: 'sol', address: 'XsCucuUESBi3ZjRxmjwUzGYuf6ZrtZDUvK6XhRA4RR3', symbol: 'AAPL' }, listed), true);
@@ -523,50 +333,20 @@ test('RWA and tokenized stocks are skipped by address or issuer marker, not by t
   assert.equal(api.shouldSkipToken(card, {}), false);
 });
 
-test('user submits and repeated addresses are dropped inside 8 seconds', () => {
-  const evm = '0x' + 'ab'.repeat(20);
-  const sol = 'HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ';
-  assert.equal(api.contractAddress(evm.toUpperCase()), evm);
-  assert.equal(api.contractAddress(sol), sol);
-  assert.equal(api.contractAddress('/pnl'), '');
-  assert.equal(api.contractAddress('hello'), '');
-  const state = api.emptyUserGuard();
-  const first = api.admitUser(state, { chatId: '1', userId: '9', address: evm }, 10000);
-  assert.equal(first.allow, true);
-  assert.equal(first.notice, false);
-  state.busy = false;
-  const mash = api.admitUser(state, { chatId: '1', userId: '9', address: evm }, 10000 + 1000);
-  assert.equal(mash.allow, false);
-  assert.equal(mash.notice, true);
-  const again = api.admitUser(state, { chatId: '1', userId: '9', address: sol }, 10000 + 2000);
-  assert.equal(again.allow, false);
-  assert.equal(again.notice, false);
-  const other = api.admitUser(state, { chatId: '1', userId: '8', address: sol }, 10000 + 3000);
-  assert.equal(other.allow, false);
-  state.busy = true;
-  const busy = api.admitUser(state, { chatId: '2', userId: '1', address: '' }, 10000 + 9000);
-  assert.equal(busy.allow, false);
-  state.busy = false;
-  const later = api.admitUser(state, { chatId: '1', userId: '9', address: evm }, 10000 + 8000);
-  assert.equal(later.allow, true);
-  state.busy = false;
-  assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000), true);
-  assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000 + 1000), false);
-  assert.equal(api.claimGmgnAddress(state, 'sol', sol, 50000 + 8000), true);
-});
-
-test('pool rows missing from seen are still unsent, and a dead worker is not Durdur', () => {
-  const pool = [
-    { chain: 'sol', address: 'sent', timestamp: 1, card: { symbol: 'OLD' } },
-    { chain: 'sol', address: 'new', timestamp: 2, card: { symbol: 'NEW' } },
-    { chain: 'sol', address: 'new', timestamp: 3, card: { symbol: 'NEW' } },
-    { chain: 'robinhood', address: 'skip', timestamp: 4, card: { symbol: 'RWA' } },
-  ];
-  const rows = api.unsentPoolRows(pool, { 'sol:sent': true, 'robinhood:skip': 'skip' });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].address, 'new');
-  assert.equal(api.resumeMonitor({ running: false, userStopped: true, scanId: 5 }), false);
-  assert.equal(api.resumeMonitor({ running: false, userStopped: null, scanId: 1790619675401 }), true);
-  assert.equal(api.resumeMonitor({ running: true, userStopped: false, scanId: 1 }), true);
-  assert.equal(api.resumeMonitor({ running: false, userStopped: null, scanId: 0 }), false);
+test('sent csv dedups by chain and address and drops the alert transcript', () => {
+  const raw = '{"savedAt":1,"alertLog":[{"symbol":"OLD","address":"aaa","chain":"sol","at":9,"note":"DO_NOT_KEEP"},{"symbol":"Two, Name","address":"bbb","chain":"base"}],"pool":[{"address":"ccc"}],"seen":{"sol:aaa":true}}';
+  const dropped = api.dropAlertTranscript(raw);
+  assert.equal(dropped.dropped, true);
+  assert.equal(dropped.text.includes('DO_NOT_KEEP'), false);
+  assert.equal(dropped.text.includes('alertLog'), false);
+  const parsed = JSON.parse(dropped.text);
+  assert.equal(parsed.pool.length, 1);
+  assert.equal(parsed.seen['sol:aaa'], true);
+  assert.equal(dropped.seeds[0].at, undefined);
+  const csv = api.mergeSentCsv('', api.sentSeedRows(dropped.seeds, { 'sol:aaa': true, 'sol:skip': 'skip' }, []));
+  assert.equal(csv.startsWith('symbol,address,chain\n'), true);
+  assert.equal(csv.includes('"Two, Name",bbb,base'), true);
+  assert.equal(api.mergeSentCsv(csv, [{ symbol: 'RENAME', address: 'aaa', chain: 'sol' }]), csv);
+  assert.equal(api.sentKeySet(csv)['sol:aaa'], true);
+  assert.equal(api.sentKeySet(csv)['RENAME:aaa'], undefined);
 });

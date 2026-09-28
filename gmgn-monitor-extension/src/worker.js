@@ -48,7 +48,7 @@ function safeError(err, token, apiKey) {
 }
 
 function emptyCursor() {
-  return { running: false, userStopped: null, chain: 'sol', tab: '', scanId: 0, error: '', pending: [] };
+  return { running: false, chain: 'sol', tab: '', scanId: 0, error: '', pending: [] };
 }
 
 async function getLock() {
@@ -74,8 +74,7 @@ async function getSession() {
   var cursor = await getCursor();
   var lock = await getLock();
   return {
-    running: GmgnParse.resumeMonitor(cursor),
-    userStopped: cursor.userStopped === true ? true : cursor.userStopped === false ? false : null,
+    running: !!cursor.running && !!lock.held,
     chain: cursor.chain || 'sol',
     tab: cursor.tab || '',
     tabId: lock.tabId,
@@ -89,7 +88,6 @@ async function saveSession(state) {
   await saveLocal({
     cursor: {
       running: !!state.running,
-      userStopped: state.userStopped === true ? true : state.userStopped === false ? false : null,
       chain: state.chain || 'sol',
       tab: state.tab || '',
       scanId: state.scanId || 0,
@@ -147,7 +145,7 @@ function scheduleMirror() {
 }
 
 async function readBlob() {
-  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'rwaIndex', 'cursor', 'savedAt', 'tgUpdateOffset', 'athRefreshAt', 'pnlPostedAt']);
+  var data = await chrome.storage.local.get(['settings', 'pool', 'seen', 'alertsSent', 'rwaIndex', 'cursor', 'savedAt']);
   var cursor = Object.assign(emptyCursor(), data.cursor || {});
   if (!Array.isArray(cursor.pending)) cursor.pending = [];
   return {
@@ -158,16 +156,13 @@ async function readBlob() {
     alertsSent: Number(data.alertsSent) || 0,
     rwaIndex: data.rwaIndex || null,
     cursor: cursor,
-    tgUpdateOffset: data.tgUpdateOffset != null ? Number(data.tgUpdateOffset) || 0 : 0,
-    athRefreshAt: Number(data.athRefreshAt) || 0,
-    pnlPostedAt: Number(data.pnlPostedAt) || 0,
   };
 }
 
 async function writeBlob(blob) {
   var cursor = Object.assign(emptyCursor(), blob.cursor || {});
   if (!Array.isArray(cursor.pending)) cursor.pending = [];
-  var next = {
+  await chrome.storage.local.set({
     savedAt: Number(blob.savedAt) || Date.now(),
     settings: blob.settings || null,
     pool: Array.isArray(blob.pool) ? blob.pool : [],
@@ -175,19 +170,12 @@ async function writeBlob(blob) {
     alertsSent: Number(blob.alertsSent) || 0,
     rwaIndex: blob.rwaIndex || null,
     cursor: cursor,
-  };
-  if (blob.tgUpdateOffset != null) next.tgUpdateOffset = Number(blob.tgUpdateOffset) || 0;
-  if (blob.athRefreshAt != null) next.athRefreshAt = Number(blob.athRefreshAt) || 0;
-  if (blob.pnlPostedAt != null) next.pnlPostedAt = Number(blob.pnlPostedAt) || 0;
-  await chrome.storage.local.set(next);
+  });
 }
 
 async function flushMirror() {
   try {
     var blob = await readBlob();
-    var saved = await GmgnPersist.readSavedFile();
-    if (saved.file) blob = GmgnParse.mergeDataFile(blob, saved.file);
-    delete blob.pnlAth;
     if (GmgnPersist.localEmpty(blob)) return;
     await GmgnPersist.writeDataFile(blob);
   } catch (e) { /* klasör yok */ }
@@ -206,8 +194,14 @@ async function markSeenFromCsv() {
   if (changed) await chrome.storage.local.set({ seen: seen });
 }
 
+async function appendScreenLog(line) {
+  var data = await chrome.storage.local.get('screenLog');
+  var lines = Array.isArray(data.screenLog) ? data.screenLog.slice(-49) : [];
+  if (line) lines.push(String(line).slice(0, 200));
+  await chrome.storage.local.set({ screenLog: lines });
+}
+
 async function syncWithFile() {
-  try { await syncPnlFile(); } catch (e) { /* pnl dosyası sonra */ }
   lastRestored = false;
   var local = await readBlob();
   var file = null;
@@ -221,11 +215,9 @@ async function syncWithFile() {
   } catch (e) { /* csv sonra */ }
   try { await chrome.storage.local.remove('alertLog'); } catch (e) { /* yok */ }
   if (GmgnPersist.shouldRestore(local, file)) {
+    delete file.alertLog;
     await writeBlob(file);
     lastRestored = true;
-    if (file && file.pnlAth) {
-      try { await GmgnPersist.writeDataFile(GmgnParse.mergeDataFile(file, file)); } catch (e) { /* klasör yok */ }
-    }
   } else if (!GmgnPersist.localEmpty(local)) {
     var fileAt = file ? (Number(file.savedAt) || 0) : -1;
     if (!file || (Number(local.savedAt) || 0) > fileAt) {
@@ -266,20 +258,12 @@ async function migrateSessionCursor() {
 
 async function resumeIfUnlocked() {
   var cursor = await getCursor();
-  if (!GmgnParse.resumeMonitor(cursor)) return;
-  if (!cursor.running || cursor.userStopped !== false) {
-    cursor.running = true;
-    cursor.userStopped = false;
-    await saveLocal({ cursor: cursor });
-  }
+  if (!cursor.running) return;
   var lock = await getLock();
-  if (!lock.held) await saveLock({ held: true, tabId: lock.tabId });
+  if (lock.held) return;
+  await saveLock({ held: true, tabId: null });
   ensureAlarm();
-  await deliverUnsent();
-  var session = await getSession();
-  var tab = await getManagedTab(session);
-  if (tab && ports.get(tab.id)) return;
-  await openOrFocus(session);
+  await openOrFocus(await getSession());
 }
 
 function filtersFrom(settings) {
@@ -358,15 +342,7 @@ function sendScan(port, session, settings) {
   });
 }
 
-var tabOpen = null;
-
 async function openOrFocus(session) {
-  if (tabOpen) return tabOpen;
-  tabOpen = openMonitor(session).finally(function () { tabOpen = null; });
-  return tabOpen;
-}
-
-async function openMonitor(session) {
   var tab = await getManagedTab(session);
   var url = monitorUrl(session.chain);
   if (!tab) {
@@ -438,18 +414,17 @@ async function onTabResult(msg) {
   }
 }
 
-async function sendTelegram(token, chatId, text, replyMarkup, plain) {
-  var payload = {
-    chat_id: chatId,
-    text: text,
-    disable_web_page_preview: true,
-  };
-  if (!plain) payload.parse_mode = 'HTML';
-  if (replyMarkup) payload.reply_markup = replyMarkup;
+async function sendTelegram(token, chatId, text, replyMarkup) {
   var res = await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'HTML',
+      reply_markup: replyMarkup,
+      disable_web_page_preview: true,
+    }),
   });
   var data = await res.json();
   if (!data.ok) throw new Error(data.description || 'Telegram hatası');
@@ -585,9 +560,12 @@ async function getRwaIndex() {
   return rwaRefresh;
 }
 
-async function sendUnseen(merged, session) {
+async function onChainDone(msg) {
+  var session = await getSession();
+  if (!session.running || msg.scanId !== session.scanId) return;
   var settings = await getSettings();
   var local = await getLocal();
+  var merged = GmgnParse.mergeByAddress((session.pending || []).map(function (row) { return row.card; }));
   var rwaIndex = emptyRwaPlatforms();
   try { rwaIndex = await getRwaIndex(); } catch (e) { rwaIndex = emptyRwaPlatforms(); }
   if (!settings.botToken || !settings.chatId) {
@@ -602,7 +580,6 @@ async function sendUnseen(merged, session) {
       await saveLocal({ seen: local.seen });
       continue;
     }
-    if (!GmgnParse.claimGmgnAddress(userGuard, item.chain, item.address, Date.now())) continue;
     if (GmgnParse.shouldSkipToken(item, rwaIndex)) {
       local.seen[key] = 'skip';
       await saveLocal({ seen: local.seen });
@@ -619,45 +596,20 @@ async function sendUnseen(merged, session) {
       local.seen[key] = true;
       local.alertsSent += 1;
       await GmgnPersist.appendSentCsv({
-        symbol: item.symbol || view.symbol || '',
+        symbol: item.symbol || '',
         address: item.address,
         chain: item.chain,
       });
+      await appendScreenLog((item.symbol || item.address) + ' · ' + item.chain);
       session.error = '';
       await saveLocal({ seen: local.seen, alertsSent: local.alertsSent });
     } catch (e) {
       session.error = safeError(e, settings.botToken, settings.gmgnApiKey);
-      await saveSession(session);
     }
   }
-  return session;
-}
-
-async function deliverUnsent() {
-  var local = await getLocal();
-  var rows = GmgnParse.unsentPoolRows(local.pool, local.seen);
-  if (!rows.length) return;
-  var cards = rows.map(function (row) {
-    return Object.assign({}, row.card || {}, {
-      chain: row.chain,
-      address: row.address,
-      tab: row.tab || (row.card && row.card.tab) || '',
-    });
-  });
-  var session = await getSession();
-  await sendUnseen(GmgnParse.mergeByAddress(cards), session);
-}
-
-async function onChainDone(msg) {
-  var session = await getSession();
-  if (!session.running || msg.scanId !== session.scanId) return;
-  var settings = await getSettings();
-  var merged = GmgnParse.mergeByAddress((session.pending || []).map(function (row) { return row.card; }));
-  session = await sendUnseen(merged, session);
   var next = GmgnParse.nextChain(session.chain, settings.chains);
   if (!next) {
     session.running = false;
-    session.userStopped = true;
     session.error = 'En az bir zincir seçin.';
     session.pending = [];
     await saveSession(session);
@@ -692,11 +644,10 @@ async function onPortMessage(port, msg) {
 }
 
 async function startScan() {
-  var session = await getSession();
-  if (session.running) return statusPayload();
   var settings = await getSettings();
   var chains = GmgnParse.enabledChainOrder(settings.chains);
   var tabs = enabledTabs(settings);
+  var session = await getSession();
   if (!chains.length) {
     session.running = false;
     session.error = 'En az bir zincir seçin.';
@@ -710,7 +661,6 @@ async function startScan() {
     return statusPayload();
   }
   session.running = true;
-  session.userStopped = false;
   session.chain = chains[0];
   session.tab = '';
   session.scanId = Date.now();
@@ -725,7 +675,6 @@ async function startScan() {
 async function stopScan() {
   var session = await getSession();
   session.running = false;
-  session.userStopped = true;
   await saveSession(session);
   ports.forEach(function (port) {
     try { port.postMessage({ type: 'STOP' }); } catch (e) { /* closed */ }
@@ -765,41 +714,14 @@ chrome.runtime.onConnect.addListener(function (port) {
     if (ports.get(tabId) === port) ports.delete(tabId);
   });
   port.onMessage.addListener(function (msg) {
-    if (msg && msg.type === 'ATH_RESULT') {
-      var done = athWaiters[msg.id];
-      if (done) {
-        delete athWaiters[msg.id];
-        done(msg);
-      }
-      return;
-    }
     enqueue(function () { return onPortMessage(port, msg); });
   });
 });
 
-var UI_ACTIONS = { START: 1, STOP: 1, SAVE_SETTINGS: 1, SYNC_FILE: 1, RESET_POOL: 1, TEST_MESSAGE: 1, PNL_REFRESH: 1 };
-var userGuard = GmgnParse.emptyUserGuard();
-var uiWaitNoted = false;
-
 chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
-  var ui = !!(msg && UI_ACTIONS[msg.type]);
-  if (ui && userGuard.busy) {
-    var tell = !uiWaitNoted;
-    uiWaitNoted = true;
-    sendResponse(tell ? { ok: false, wait: true, error: 'Bekleyin.' } : { ok: true, ignored: true });
-    return true;
-  }
-  if (ui) {
-    userGuard.busy = true;
-    uiWaitNoted = false;
-  }
   enqueue(function () {
     return handleMessage(msg);
-  }).then(function (res) {
-    if (ui) userGuard.busy = false;
-    sendResponse(res);
-  }, function (err) {
-    if (ui) userGuard.busy = false;
+  }).then(sendResponse, function (err) {
     sendResponse({ ok: false, error: safeError(err, '') });
   });
   return true;
@@ -822,446 +744,23 @@ async function handleMessage(msg) {
   }
   if (msg.type === 'RESET_POOL') return resetPool();
   if (msg.type === 'TEST_MESSAGE') return testMessage(msg);
-  if (msg.type === 'PNL_REFRESH') return refreshPnlUi();
   return { ok: false, error: 'Bilinmeyen mesaj' };
 }
 
-var PNL_DUP_MS = 5 * 60 * 1000;
-var ATH_DAY_MS = 24 * 60 * 60 * 1000;
-var athRunning = false;
-var pnlPassOwnsFile = false;
-var athPass = { done: 0, total: 0, lastError: '' };
-var pnlLoadedLogged = -1;
-var athWaiters = {};
-
-function waitForPort(tabId, ms) {
-  return new Promise(function (resolve) {
-    var left = ms;
-    function tick() {
-      var port = ports.get(tabId);
-      if (port) return resolve(port);
-      if (left <= 0) return resolve(null);
-      left -= 200;
-      setTimeout(tick, 200);
-    }
-    tick();
-  });
-}
-
-async function ensureAthPort() {
-  var tabs = await chrome.tabs.query({ url: 'https://gmgn.ai/*' });
-  for (var i = 0; i < tabs.length; i++) {
-    var ready = ports.get(tabs[i].id);
-    if (ready) return ready;
-  }
-  var tab = null;
-  for (var j = 0; j < tabs.length; j++) {
-    if ((tabs[j].url || '').indexOf('/monitor') !== -1) {
-      tab = tabs[j];
-      break;
-    }
-  }
-  if (!tab && tabs.length) tab = tabs[0];
-  if (!tab) {
-    var session = await getSession();
-    var created = await chrome.tabs.create({ url: monitorUrl(session.chain || 'sol'), active: false });
-    return waitForPort(created.id, 15000);
-  }
-  var waited = await waitForPort(tab.id, 2000);
-  if (waited) return waited;
-  try { await chrome.tabs.reload(tab.id); } catch (e) { /* closed */ }
-  return waitForPort(tab.id, 15000);
-}
-
-function askAth(port, payload) {
-  return new Promise(function (resolve, reject) {
-    var id = String(Date.now()) + ':' + Math.random().toString(16).slice(2);
-    var timer = setTimeout(function () {
-      delete athWaiters[id];
-      reject(new Error('GMGN zaman aşımı'));
-    }, 8000);
-    athWaiters[id] = function (msg) {
-      clearTimeout(timer);
-      resolve(msg);
-    };
-    try {
-      port.postMessage({
-        type: 'ATH',
-        id: id,
-        openUrl: payload.openUrl,
-        publicUrl: payload.publicUrl,
-        apiKey: payload.apiKey || '',
-      });
-    } catch (e) {
-      clearTimeout(timer);
-      delete athWaiters[id];
-      reject(e);
-    }
-  });
-}
-
-async function fetchAthMcap(chain, address, apiKey) {
-  var port = await ensureAthPort();
-  if (!port) throw new Error('GMGN sekme yok');
-  var openUrl = 'https://gmgn.ai/v1/token/info'
-    + '?chain=' + encodeURIComponent(chain)
-    + '&address=' + encodeURIComponent(address)
-    + '&timestamp=' + Math.floor(Date.now() / 1000)
-    + '&client_id=' + gmgnClientId();
-  var publicUrl = 'https://gmgn.ai/defi/quotation/v1/tokens/' + encodeURIComponent(chain) + '/' + encodeURIComponent(address);
-  var msg = await askAth(port, { openUrl: openUrl, publicUrl: publicUrl, apiKey: apiKey || '' });
-  if (!msg || Number(msg.status) === 403) throw new Error('GMGN 403');
-  if (!(Number(msg.status) >= 200 && Number(msg.status) < 300)) throw new Error('GMGN ' + (msg.status || 'hata'));
-  var json = null;
-  try { json = JSON.parse(msg.body || ''); } catch (e) { json = null; }
-  if (json && json.code != null && Number(json.code) !== 0) throw new Error('GMGN ' + (json.message || json.code));
-  var data = json && json.data != null ? json.data : json;
-  return GmgnParse.athMcapFromInfo(data);
-}
-
-async function appendPnlLog(line, view) {
-  var data = await chrome.storage.local.get('pnlLog');
-  var lines = Array.isArray(data.pnlLog) ? data.pnlLog.slice(-49) : [];
-  if (line) lines.push(String(line).slice(0, 300));
-  var next = { pnlLog: lines };
-  if (view) {
-    athPass = {
-      done: Number(view.done) || 0,
-      total: Number(view.total) || 0,
-      lastError: view.lastError != null ? String(view.lastError) : athPass.lastError,
-    };
-    next.pnlView = athPass;
-  }
-  await chrome.storage.local.set(next);
-}
-
-function progressText(view) {
-  var text = 'PnL ' + (Number(view && view.done) || 0) + '/' + (Number(view && view.total) || 0);
-  if (view && view.lastError) text += '\nSon hata: ' + view.lastError;
-  return text;
-}
-
-async function syncPnlFile() {
-  if (pnlPassOwnsFile) {
-    var held = await GmgnPersist.readPnlFile();
-    return { map: held.file || {}, handle: !!held.handle, fromFile: 0, sent: 0, wrote: false };
-  }
-  var saved = await GmgnPersist.readSavedFile();
-  var local = await getLocal();
-  var pnl = await GmgnPersist.readPnlFile();
-  var legacy = await chrome.storage.local.get('pnlAth');
-  var merged = GmgnParse.mergePnlFromSources(pnl.file, saved.file, local);
-  merged.map = GmgnParse.absorbLegacyAth(merged.map, legacy.pnlAth);
-  merged.handle = !!(saved.handle || pnl.handle);
-  merged.wrote = false;
-  if (merged.handle) {
-    merged.wrote = await GmgnPersist.writePnlFile(merged.map);
-    if (!merged.wrote) await appendPnlLog('PnL dosyası yazılamadı');
-  }
-  var view = GmgnParse.pnlProgress(merged.map);
-  if (merged.fromFile !== pnlLoadedLogged) {
-    pnlLoadedLogged = merged.fromFile;
-    await appendPnlLog('Dosyadan ' + merged.fromFile + ' token yüklendi.', view);
-  } else await appendPnlLog('', view);
-  return merged;
-}
-
-async function postTop20(settings, keepPending) {
-  if (!settings || !settings.botToken || !settings.chatId) {
-    await appendPnlLog('Telegram post fail Telegram ayarları eksik');
-    return false;
-  }
-  var read = await GmgnPersist.readPnlFile();
-  var map = read.file || {};
-  var view = GmgnParse.pnlProgress(map);
-  if (!view.ranked) {
-    await appendPnlLog('Telegram post yok', view);
-    return false;
-  }
-  try {
-    await sendTelegram(settings.botToken, settings.chatId, GmgnParse.formatPnl(GmgnParse.pnlRecords(map)), null, true);
-    await appendPnlLog('Telegram post ok');
-    var flags = { pnlPostedAt: Date.now(), pnlWaitCount: 0 };
-    if (!keepPending) flags.pnlPostPending = false;
-    await chrome.storage.local.set(flags);
-    return true;
-  } catch (e) {
-    await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey), { done: view.done, total: view.total, lastError: safeError(e, settings.botToken, settings.gmgnApiKey) });
-    return false;
-  }
-}
-
-async function runAthRefresh() {
-  if (athRunning) return;
-  athRunning = true;
-  try {
-    var synced = await syncPnlFile();
-    var stamp = await chrome.storage.local.get(['athRefreshAt', 'pnlPostPending']);
-    var last = Number(stamp.athRefreshAt) || 0;
-    var full = !(last && Date.now() - last < ATH_DAY_MS);
-    var settings = await getSettings();
-    var map = synced.map;
-    var targets = [];
-    Object.keys(map).forEach(function (key) {
-      var rec = map[key];
-      if (!GmgnParse.includeAthTarget(rec, full)) return;
-      var cut = key.indexOf(':');
-      targets.push({
-        key: key,
-        chain: cut < 0 ? '' : key.slice(0, cut),
-        address: cut < 0 ? key : key.slice(cut + 1),
-        symbol: rec.symbol || '',
-        entryMcap: Number(rec.entryMcap),
-      });
-    });
-    if (targets.length) await appendPnlLog('', { done: 0, total: targets.length, lastError: athPass.lastError });
-    pnlPassOwnsFile = true;
-    var athStopped = false;
-    var refusalStreak = 0;
-    if (targets.length) {
-      for (var i = 0; i < targets.length; i++) {
-        if (i) await sleep(300);
-        var row = targets[i];
-        var ath = null;
-        var err = '';
-        try {
-          ath = await fetchAthMcap(row.chain, row.address, settings.gmgnApiKey);
-          if (!(Number(ath) > 0)) err = 'ATH yok';
-        } catch (e) {
-          err = safeError(e, settings.botToken, settings.gmgnApiKey);
-        }
-        var rec = map[row.key];
-        rec.updatedAt = Date.now();
-        var refused = GmgnParse.athRefusal(err);
-        if (err && !refused) rec.lastError = err;
-        else if (refused) rec.lastError = 'GMGN 403';
-        else {
-          rec.lastError = '';
-          rec.athMcap = Number(ath);
-          var multiple = GmgnParse.pnlMultiple(rec.entryMcap, rec.athMcap);
-          rec.multiple = multiple;
-          rec.pct = multiple == null ? null : GmgnParse.pnlPercent(multiple);
-        }
-        var wrote = await GmgnPersist.writePnlFile(map);
-        var n = (i + 1) + '/' + targets.length;
-        var label = row.symbol || row.address;
-        if (!wrote && !err) err = 'PnL dosyası yazılamadı';
-        var view = { done: i + 1, total: targets.length, lastError: refused ? 'GMGN 403' : (err || athPass.lastError) };
-        if (refused) {
-          refusalStreak += 1;
-          if (GmgnParse.stopAfterAthRefusals(refusalStreak)) {
-            athStopped = true;
-            await appendPnlLog('GMGN refused the session and the pass stopped', view);
-            break;
-          }
-          await appendPnlLog('', view);
-          continue;
-        }
-        refusalStreak = 0;
-        if (err) await appendPnlLog('ATH ' + n + ' fail ' + label + ' ' + err, view);
-        else await appendPnlLog('ATH ' + n + ' ok ' + label, view);
-      }
-      if (full && !athStopped) await chrome.storage.local.set({ athRefreshAt: Date.now() });
-    }
-    pnlPassOwnsFile = false;
-    var pendingNow = await chrome.storage.local.get('pnlPostPending');
-    if (pendingNow.pnlPostPending && GmgnParse.pnlProgress(map).ranked > 0) await postTop20(settings, false);
-  } finally {
-    pnlPassOwnsFile = false;
-    athRunning = false;
-  }
-}
-
-async function replyPnl(settings) {
-  if (athRunning) {
-    try {
-      await sendTelegram(settings.botToken, settings.chatId, progressText(athPass), null, true);
-    } catch (e) {
-      await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey));
-    }
-    return false;
-  }
-  var synced = await syncPnlFile();
-  if (!synced.handle) {
-    try { await sendTelegram(settings.botToken, settings.chatId, 'Veri klasörü seçilmedi.', null, true); }
-    catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
-    return false;
-  }
-  if (!synced.sent) {
-    try { await sendTelegram(settings.botToken, settings.chatId, 'Henüz sıralanacak token yok.', null, true); }
-    catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
-    await chrome.storage.local.set({ pnlPostedAt: Date.now() });
-    return false;
-  }
-  if (GmgnParse.pnlProgress(synced.map).ranked > 0) {
-    await postTop20(settings, false);
-    return false;
-  }
-  var loaded = 'Dosyadan ' + synced.fromFile + ' token yüklendi.';
-  var counted = await chrome.storage.local.get('pnlWaitCount');
-  if (!Number(counted.pnlWaitCount)) {
-    try { await sendTelegram(settings.botToken, settings.chatId, loaded, null, true); }
-    catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
-    await chrome.storage.local.set({ pnlWaitCount: synced.fromFile });
-  }
-  await chrome.storage.local.set({ pnlPostPending: true });
-  return true;
-}
-
-async function postScheduledPnl() {
-  var settings = await getSettings();
-  if (!settings.botToken || !settings.chatId) return false;
-  var data = await chrome.storage.local.get('pnlPostedAt');
-  if (Date.now() - (Number(data.pnlPostedAt) || 0) < PNL_DUP_MS) return false;
-  if (athRunning) return false;
-  var synced = await syncPnlFile();
-  if (!synced.handle || !synced.sent) {
-    if (synced.handle && !synced.sent) {
-      try { await sendTelegram(settings.botToken, settings.chatId, 'Henüz sıralanacak token yok.', null, true); }
-      catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
-      await chrome.storage.local.set({ pnlPostedAt: Date.now() });
-    }
-    return false;
-  }
-  if (GmgnParse.pnlProgress(synced.map).ranked > 0) {
-    await postTop20(settings, false);
-    return false;
-  }
-  await chrome.storage.local.set({ pnlPostPending: true });
-  return true;
-}
-
-async function refreshPnlUi() {
-  if (athRunning) return { ok: true, running: true, progress: athPass };
-  await chrome.storage.local.set({ pnlPostPending: true });
-  runAthRefresh();
-  return { ok: true, running: true, progress: athPass };
-}
-
-async function pollPnl() {
-  try {
-    var settings = await getSettings();
-    if (!settings.botToken || !settings.chatId) return;
-    var stored = await chrome.storage.local.get('tgUpdateOffset');
-    var hasOffset = stored.tgUpdateOffset != null && stored.tgUpdateOffset !== '';
-    var offset = Number(stored.tgUpdateOffset) || 0;
-    var url = 'https://api.telegram.org/bot' + settings.botToken + '/getUpdates?timeout=0&allowed_updates='
-      + encodeURIComponent('["message"]');
-    if (hasOffset) url += '&offset=' + offset;
-    var res = await fetch(url);
-    var data = await res.json();
-    if (!data || !data.ok || !Array.isArray(data.result)) return;
-    if (!data.result.length) return;
-    var next = offset;
-    var want = false;
-    var notify = false;
-    var progressReply = false;
-    var now = Date.now();
-    var nowSec = Math.floor(now / 1000);
-    for (var i = 0; i < data.result.length; i++) {
-      var up = data.result[i];
-      if (!up || up.update_id == null) continue;
-      if (up.update_id + 1 > next) next = up.update_id + 1;
-      var msg = up.message;
-      if (!msg || !msg.chat || String(msg.chat.id) !== String(settings.chatId)) continue;
-      var text = String(msg.text || '').trim();
-      var pnl = /^\/pnl(?:@[A-Za-z0-9_]+)?$/.test(text);
-      var addr = GmgnParse.contractAddress(text);
-      if (!pnl && !addr) continue;
-      var age = nowSec - Number(msg.date || 0);
-      if (!(age >= 0 && age <= 120)) continue;
-      var hit = { chatId: msg.chat.id, userId: msg.from && msg.from.id != null ? msg.from.id : '', address: addr };
-      if (pnl && athRunning) {
-        var runningHit = GmgnParse.admitUser(userGuard, hit, now);
-        if (!runningHit.allow) {
-          if (runningHit.notice) notify = true;
-          continue;
-        }
-        userGuard.busy = false;
-        progressReply = true;
-        continue;
-      }
-      var decision = GmgnParse.admitUser(userGuard, hit, now);
-      if (!decision.allow) {
-        if (decision.notice) notify = true;
-        continue;
-      }
-      if (!pnl) {
-        userGuard.busy = false;
-        continue;
-      }
-      want = true;
-    }
-    try {
-      await saveLocal({ tgUpdateOffset: next });
-      if (progressReply && settings.botToken && settings.chatId) {
-        try { await sendTelegram(settings.botToken, settings.chatId, progressText(athPass), null, true); }
-        catch (e) { await appendPnlLog('Telegram post fail ' + safeError(e, settings.botToken, settings.gmgnApiKey)); }
-      }
-      if (notify && settings.botToken && settings.chatId) {
-        try { await sendTelegram(settings.botToken, settings.chatId, 'Bekleyin.', null, true); } catch (e) { /* one notice */ }
-      }
-      if (!want) return false;
-      return await replyPnl(settings);
-    } finally {
-      if (want) userGuard.busy = false;
-    }
-  } catch (e) {
-    return false;
-  }
-}
-
-async function maybeFirstAthRefresh() {
-  var stamp = await chrome.storage.local.get('athRefreshAt');
-  if (Number(stamp.athRefreshAt) > 0) return;
-  return runAthRefresh();
-}
-
-async function ensurePnlAlarms() {
-  var existing = await chrome.alarms.getAll();
-  var names = {};
-  existing.forEach(function (alarm) { names[alarm.name] = true; });
-  if (!names['gmgn-pnl-poll']) chrome.alarms.create('gmgn-pnl-poll', { periodInMinutes: 1 });
-  if (!names['gmgn-pnl-post']) chrome.alarms.create('gmgn-pnl-post', { periodInMinutes: 360 });
-  if (!names['gmgn-pnl-ath']) chrome.alarms.create('gmgn-pnl-ath', { periodInMinutes: 1440 });
-}
-
 chrome.alarms.onAlarm.addListener(function (alarm) {
-  if (alarm.name === 'gmgn-keepalive') {
-    enqueue(async function () {
-      var session = await getSession();
-      if (!session.running) return;
-      await deliverUnsent();
-      session = await getSession();
-      var tab = await getManagedTab(session);
-      if (tab && ports.get(tab.id)) return;
-      await openOrFocus(session);
-    });
-    return;
-  }
-  if (alarm.name === 'gmgn-pnl-poll') {
-    return enqueue(function () { return pollPnl(); }).then(function (pending) {
-      if (pending) return runAthRefresh();
-      return maybeFirstAthRefresh();
-    });
-  }
-  if (alarm.name === 'gmgn-pnl-post') {
-    return enqueue(function () { return postScheduledPnl(); }).then(function (pending) {
-      if (pending) return runAthRefresh();
-    });
-  }
-  if (alarm.name === 'gmgn-pnl-ath') return runAthRefresh();
+  if (alarm.name !== 'gmgn-keepalive') return;
+  enqueue(async function () {
+    var session = await getSession();
+    if (!session.running) return;
+    var tab = await getManagedTab(session);
+    if (tab && ports.get(tab.id)) return;
+    await openOrFocus(session);
+  });
 });
 
 ensureAlarm();
-chrome.runtime.onStartup.addListener(function () {
-  enqueue(function () { return resumeIfUnlocked(); });
-});
 enqueue(async function () {
   await migrateSessionCursor();
   await syncWithFile();
   await resumeIfUnlocked();
-  await ensurePnlAlarms();
-}).then(function () {
-  return runAthRefresh();
 });

@@ -862,321 +862,27 @@
     return { inline_keyboard: keyboard };
   }
 
-  function athMcapFromInfo(info) {
-    if (!info || typeof info !== 'object') return null;
-    if (info.token && typeof info.token === 'object') info = info.token;
-    var athMc = asNum(info.ath_market_cap);
-    if (athMc != null && athMc > 0) return athMc;
-    var priceObj = info.price && typeof info.price === 'object' ? info.price : null;
-    var priceUsd = asNum(priceObj ? priceObj.price : (typeof info.price === 'object' ? null : info.price));
-    var mc = asNum(info.market_cap != null ? info.market_cap : info.usd_market_cap);
-    var athPrice = asNum(info.ath_price);
-    if (athPrice != null && athPrice > 0 && priceUsd != null && priceUsd > 0 && mc != null && mc > 0) {
-      return mc * (athPrice / priceUsd);
-    }
-    return null;
-  }
-
-  function pnlMultiple(entryMcap, athMcap) {
-    var entry = Number(entryMcap);
-    var ath = Number(athMcap);
-    if (!(entry > 0) || !(ath > 0)) return null;
-    var multiple = ath / entry;
-    return isFinite(multiple) ? multiple : null;
-  }
-
-  function pnlPercent(multiple) {
-    var m = Number(multiple);
-    if (!isFinite(m)) return null;
-    return (m - 1) * 100;
-  }
-
-  function formatPnlMultiple(multiple) {
-    return (Math.round(Number(multiple) * 10) / 10).toFixed(1) + 'x';
-  }
-
-  function formatPnlPercent(percent) {
-    var n = Math.round(Number(percent));
-    if (!isFinite(n)) return '';
-    return (n > 0 ? '+' : '') + n + '%';
-  }
-
-  function rankPnl(entries) {
-    var seen = {};
-    var rows = [];
-    (Array.isArray(entries) ? entries : []).forEach(function (row) {
-      if (!row) return;
-      var multiple = pnlMultiple(row.entryMcap, row.athMcap);
-      if (multiple == null) return;
-      var key = String(row.chain || '') + ':' + String(row.address || '');
-      if (seen[key]) return;
-      seen[key] = true;
-      rows.push({
-        chain: row.chain,
-        symbol: String(row.symbol || '').replace(/^\$/, ''),
-        entryMcap: Number(row.entryMcap),
-        athMcap: Number(row.athMcap),
-        multiple: multiple,
-        percent: pnlPercent(multiple),
-      });
-    });
-    rows.sort(function (a, b) { return b.multiple - a.multiple; });
-    return rows.slice(0, 20);
-  }
-
-  function formatPnl(entries) {
-    var rows = rankPnl(entries);
-    if (!rows.length) return 'Henüz sıralanacak token yok.';
-    var blocks = rows.map(function (row, i) {
-      return (i + 1) + '. $' + row.symbol + ' · ' + networkLabel(row.chain) + '\n'
-        + 'İlk MC ' + formatUsd(row.entryMcap) + ' → ATH ' + formatUsd(row.athMcap) + '\n'
-        + formatPnlMultiple(row.multiple) + ' · ' + formatPnlPercent(row.percent);
-    });
-    return 'PNL · Top 20\nİlk yayındaki MC ile GMGN ATH MC\n\n' + blocks.join('\n\n');
-  }
-
-  function backfillPnlRecords(seen, pool, alertLog) {
-    var earliest = {};
-    (Array.isArray(pool) ? pool : []).forEach(function (row) {
-      if (!row || !row.address || !row.card) return;
-      var key = String(row.chain || '') + ':' + String(row.address);
-      var ts = Number(row.timestamp);
-      if (!isFinite(ts)) ts = Infinity;
-      var prev = earliest[key];
-      if (!prev || ts < prev.ts) earliest[key] = { ts: ts, row: row };
-    });
-    var log = Array.isArray(alertLog) ? alertLog : [];
-    var index = {};
-    log.forEach(function (row, i) {
-      if (!row || !row.address) return;
-      var key = String(row.chain || '') + ':' + String(row.address);
-      if (index[key] == null) index[key] = i;
-    });
-    var next = null;
-    function copy() {
-      if (!next) next = log.slice();
-      return next;
-    }
-    Object.keys(seen || {}).forEach(function (key) {
-      if (seen[key] !== true) return;
-      var hit = earliest[key];
-      if (!hit) return;
-      var mc = Number(hit.row.card.mcUsd);
-      if (!(mc > 0)) return;
-      var symbol = String(hit.row.card.symbol || '').replace(/^\$/, '');
-      var idx = index[key];
-      if (idx == null) {
-        var entry = {
-          chain: hit.row.chain,
-          address: hit.row.address,
-          symbol: symbol,
-          entryMcap: mc,
-        };
-        if (hit.ts !== Infinity) {
-          entry.at = hit.row.timestamp;
-          entry.sentAt = hit.row.timestamp;
-        }
-        var created = copy();
-        index[key] = created.length;
-        created.push(entry);
-        return;
-      }
-      var existing = (next || log)[idx];
-      if (Number(existing.entryMcap) > 0) return;
-      var patched = Object.assign({}, existing, { entryMcap: mc });
-      if (symbol) patched.symbol = symbol;
-      copy()[idx] = patched;
-    });
-    return next || log;
-  }
-
-  function sentPnlEntries(seen, pool) {
-    var earliest = {};
-    (Array.isArray(pool) ? pool : []).forEach(function (row) {
-      if (!row || !row.address || !row.card) return;
-      var key = String(row.chain || '') + ':' + String(row.address);
-      var ts = Number(row.timestamp);
-      if (!isFinite(ts)) ts = Infinity;
-      var prev = earliest[key];
-      if (!prev || ts < prev.ts) earliest[key] = { ts: ts, row: row };
-    });
-    var out = [];
-    Object.keys(seen || {}).forEach(function (key) {
-      if (seen[key] !== true) return;
-      var hit = earliest[key];
-      if (!hit) return;
-      var mc = Number(hit.row.card.mcUsd);
-      if (!(mc > 0)) return;
-      out.push({
-        chain: hit.row.chain,
-        address: hit.row.address,
-        symbol: String(hit.row.card.symbol || '').replace(/^\$/, ''),
-        entryMcap: mc,
-      });
-    });
-    return out;
-  }
-
-  function blankPnlRecord() {
-    return { symbol: '', entryMcap: 0, athMcap: null, multiple: null, pct: null, updatedAt: 0, lastError: '' };
-  }
-
-  function copyPnlRecord(row) {
-    var rec = blankPnlRecord();
-    if (!row || typeof row !== 'object') return rec;
-    rec.symbol = String(row.symbol || '').replace(/^\$/, '');
-    rec.entryMcap = Number(row.entryMcap) > 0 ? Number(row.entryMcap) : 0;
-    rec.athMcap = Number(row.athMcap) > 0 ? Number(row.athMcap) : null;
-    rec.multiple = row.multiple != null && isFinite(Number(row.multiple)) ? Number(row.multiple) : null;
-    rec.pct = row.pct != null && isFinite(Number(row.pct)) ? Number(row.pct) : null;
-    rec.updatedAt = Number(row.updatedAt) || 0;
-    rec.lastError = String(row.lastError || '');
-    return rec;
-  }
-
-  function fillPnlMultiple(rec) {
-    var multiple = pnlMultiple(rec.entryMcap, rec.athMcap);
-    rec.multiple = multiple;
-    rec.pct = multiple == null ? null : pnlPercent(multiple);
-    return rec;
-  }
-
-  function mergePnlMap(existing, sentEntries) {
-    var map = {};
-    var src = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
-    Object.keys(src).forEach(function (key) {
-      if (!key || key.indexOf(':') < 0) return;
-      var row = src[key];
-      if (!row || typeof row !== 'object' || Array.isArray(row)) return;
-      map[key] = copyPnlRecord(row);
-    });
-    (Array.isArray(sentEntries) ? sentEntries : []).forEach(function (row) {
-      if (!row || !row.address) return;
-      var key = String(row.chain || '') + ':' + String(row.address);
-      var prev = map[key] || blankPnlRecord();
-      var entry = Number(row.entryMcap);
-      if (entry > 0) prev.entryMcap = entry;
-      if (row.symbol) prev.symbol = String(row.symbol).replace(/^\$/, '');
-      if (Number(prev.athMcap) > 0) fillPnlMultiple(prev);
-      map[key] = prev;
-    });
-    return map;
-  }
-
-  function absorbLegacyAth(map, legacy) {
-    var next = map || {};
-    var src = legacy && typeof legacy === 'object' && !Array.isArray(legacy) ? legacy : {};
-    Object.keys(src).forEach(function (key) {
-      var row = src[key];
-      var prev = next[key];
-      if (!prev || !row || !(Number(row.athMcap) > 0) || Number(prev.athMcap) > 0) return;
-      prev.athMcap = Number(row.athMcap);
-      if (!prev.updatedAt) prev.updatedAt = Number(row.athFetchedAt) || 0;
-      fillPnlMultiple(prev);
-    });
-    return next;
-  }
-
-  function mergePnlFromSources(pnlMap, file, storage) {
-    var filePool = file && Array.isArray(file.pool) ? file.pool : [];
-    var storePool = storage && Array.isArray(storage.pool) ? storage.pool : [];
-    var sent = sentPnlEntries(unionSeen(file && file.seen, storage && storage.seen), filePool.concat(storePool));
-    var map = mergePnlMap(pnlMap, sent);
-    map = absorbLegacyAth(map, file && file.pnlAth);
+  function sampleAlert() {
     return {
-      map: map,
-      fromFile: sentPnlEntries(file && file.seen, filePool).length,
-      sent: sent.length,
+      chain: 'sol',
+      address: 'HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ',
+      symbol: 'GP',
+      mcText: '$17.6M',
+      volumeLabel: '1h V',
+      volumeText: '$140.4K',
+      changeText: '+2.16%',
+      age: '15d',
+      holders: '15K',
+      inflowLabel: '1h Track Inflow',
+      inflowText: '$+1.04K',
+      timeframe: '1h',
+      seenTabs: { Track: true, Smart: false, KOL: false },
+      walletsByTab: {
+        Track: [{ name: 'NANSEN', txs: '3/0', buy: 3, sell: 0, bal: '$2.1K', inflow: '$+1.1K', age: '15d', action: 'Buy More' }],
+        Smart: [],
+        KOL: [],
+      },
     };
-  }
-
-  function pnlRecords(map) {
-    return Object.keys(map || {}).map(function (key) {
-      var cut = key.indexOf(':');
-      var row = map[key] || {};
-      return {
-        chain: cut < 0 ? '' : key.slice(0, cut),
-        address: cut < 0 ? key : key.slice(cut + 1),
-        symbol: row.symbol,
-        entryMcap: row.entryMcap,
-        athMcap: row.athMcap,
-        multiple: row.multiple,
-        pct: row.pct,
-        updatedAt: row.updatedAt,
-        lastError: row.lastError,
-      };
-    });
-  }
-
-  function includeAthTarget(rec, full) {
-    if (!rec || !(Number(rec.entryMcap) > 0)) return false;
-    var refused = String(rec.lastError || '').indexOf('403') !== -1;
-    if (!full && Number(rec.athMcap) > 0 && !refused) return false;
-    return true;
-  }
-
-  function athRefusal(err) {
-    return String(err || '').indexOf('403') !== -1;
-  }
-
-  function stopAfterAthRefusals(streak) {
-    return Number(streak) >= 5;
-  }
-
-  function pnlProgress(map) {
-    var keys = Object.keys(map || {});
-    var done = 0;
-    var ranked = 0;
-    var lastError = '';
-    var lastAt = 0;
-    keys.forEach(function (key) {
-      var row = map[key];
-      if (!row) return;
-      if (Number(row.updatedAt) > 0 || Number(row.athMcap) > 0 || row.lastError) done += 1;
-      if (pnlMultiple(row.entryMcap, row.athMcap) != null) ranked += 1;
-      var at = Number(row.updatedAt) || 0;
-      if (row.lastError && at >= lastAt) {
-        lastAt = at;
-        lastError = String(row.lastError);
-      }
-    });
-    return { done: done, total: keys.length, ranked: ranked, lastError: lastError };
-  }
-
-  function unionSeen(fileSeen, localSeen) {
-    var seen = Object.assign({}, fileSeen || {}, localSeen || {});
-    Object.keys(fileSeen || {}).forEach(function (key) {
-      if (fileSeen[key] === true) seen[key] = true;
-    });
-    Object.keys(localSeen || {}).forEach(function (key) {
-      if (localSeen[key] === true) seen[key] = true;
-    });
-    return seen;
-  }
-
-  function pnlStatus(opts) {
-    opts = opts || {};
-    var file = opts.fileRead ? opts.file : null;
-    var storage = opts.storage || {};
-    var filePool = file && Array.isArray(file.pool) ? file.pool : [];
-    var storePool = Array.isArray(storage.pool) ? storage.pool : [];
-    var fromFile = sentPnlEntries(file && file.seen, filePool);
-    var entries = sentPnlEntries(unionSeen(file && file.seen, storage.seen), filePool.concat(storePool));
-    var ath = opts.ath || {};
-    entries.forEach(function (row) {
-      var saved = ath[String(row.chain || '') + ':' + String(row.address || '')];
-      if (!saved || !(Number(saved.athMcap) > 0)) return;
-      row.athMcap = Number(saved.athMcap);
-      row.athFetchedAt = Number(saved.athFetchedAt) || 0;
-    });
-    var ranked = 0;
-    entries.forEach(function (row) { if (Number(row.athMcap) > 0) ranked += 1; });
-    var base = { fromFile: fromFile.length, sent: entries.length, ranked: ranked, entries: entries };
-    if (!opts.handle) return Object.assign(base, { kind: 'no-folder', text: 'Veri klasörü seçilmedi.' });
-    if (!opts.fileRead && !entries.length) return Object.assign(base, { kind: 'no-folder', text: 'Veri klasörü seçilmedi.' });
-    if (!entries.length) return Object.assign(base, { kind: 'empty', text: 'Henüz sıralanacak token yok.' });
-    if (!ranked) return Object.assign(base, { kind: 'wait', text: 'Dosyadan ' + fromFile.length + ' token yüklendi.' });
-    return Object.assign(base, { kind: 'rank', text: formatPnl(entries) });
   }
 
   function jsonStringField(obj, name) {
@@ -1382,126 +1088,9 @@
       if (seen[key] !== true) return;
       var cut = key.indexOf(':');
       if (cut < 0) return;
-      add({
-        chain: key.slice(0, cut),
-        address: key.slice(cut + 1),
-        symbol: symbolByKey[key] || '',
-      });
+      add({ chain: key.slice(0, cut), address: key.slice(cut + 1), symbol: symbolByKey[key] || '' });
     });
     return out;
-  }
-
-  function mergeDataFile(local, file) {
-    var next = Object.assign({}, file || {}, local || {});
-    next.seen = unionSeen(file && file.seen, local && local.seen);
-    var pool = [];
-    var seenRow = {};
-    [].concat((file && file.pool) || [], (local && local.pool) || []).forEach(function (row) {
-      if (!row || !row.address) return;
-      var key = String(row.chain || '') + ':' + String(row.address) + ':' + String(row.timestamp || '') + ':' + String(row.tab || '');
-      if (seenRow[key]) return;
-      seenRow[key] = true;
-      pool.push(row);
-    });
-    next.pool = pool;
-    delete next.pnlAth;
-    delete next.alertLog;
-    if (!(local && local.settings) && file) next.settings = file.settings;
-    return next;
-  }
-
-  function unsentPoolRows(pool, seen) {
-    var picked = {};
-    var out = [];
-    (pool || []).forEach(function (row) {
-      if (!row || !row.address) return;
-      var key = String(row.chain || '') + ':' + String(row.address);
-      if (seen && seen[key]) return;
-      if (picked[key]) return;
-      picked[key] = true;
-      out.push(row);
-    });
-    return out;
-  }
-
-  function resumeMonitor(cursor) {
-    if (!cursor || cursor.userStopped === true) return false;
-    if (cursor.running) return true;
-    if (cursor.userStopped === false) return true;
-    return !!(cursor.scanId && cursor.userStopped == null);
-  }
-
-  function sampleAlert() {
-    return {
-      chain: 'sol',
-      address: 'HTmQz7My6MehV7bjhJ6jde8nDND1yvsz68d24LP7YgUQ',
-      symbol: 'GP',
-      mcText: '$17.6M',
-      volumeLabel: '1h V',
-      volumeText: '$140.4K',
-      changeText: '+2.16%',
-      age: '15d',
-      holders: '15K',
-      inflowLabel: '1h Track Inflow',
-      inflowText: '$+1.04K',
-      timeframe: '1h',
-      seenTabs: { Track: true, Smart: false, KOL: false },
-      walletsByTab: {
-        Track: [{ name: 'NANSEN', txs: '3/0', buy: 3, sell: 0, bal: '$2.1K', inflow: '$+1.1K', age: '15d', action: 'Buy More' }],
-        Smart: [],
-        KOL: [],
-      },
-    };
-  }
-
-  var USER_GAP_MS = 8000;
-
-  function emptyUserGuard() {
-    return { busy: false, lastAt: {}, addrAt: {}, noticeAt: {}, gmgnAt: {} };
-  }
-
-  function contractAddress(text) {
-    var t = String(text || '').trim();
-    if (/^0x[a-fA-F0-9]{40}$/i.test(t)) return t.toLowerCase();
-    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t)) return t;
-    return '';
-  }
-
-  function admitUser(state, hit, now) {
-    var chat = String((hit && hit.chatId) || '');
-    var user = String((hit && hit.userId) || '');
-    var key = chat + '\n' + user;
-    var chatKey = 'chat\n' + chat;
-    var addr = hit && hit.address ? String(hit.address) : '';
-    var addrKey = addr ? key + '\n' + addr : '';
-    var globalAddr = addr ? '\n' + addr : '';
-    function notice() {
-      var nkey = chat || key;
-      if (state.noticeAt[nkey] && now - state.noticeAt[nkey] < USER_GAP_MS) return false;
-      state.noticeAt[nkey] = now;
-      return true;
-    }
-    var cooled = (state.lastAt[key] && now - state.lastAt[key] < USER_GAP_MS)
-      || (chat && state.lastAt[chatKey] && now - state.lastAt[chatKey] < USER_GAP_MS);
-    var sameAddr = (addrKey && state.addrAt[addrKey] && now - state.addrAt[addrKey] < USER_GAP_MS)
-      || (globalAddr && state.addrAt[globalAddr] && now - state.addrAt[globalAddr] < USER_GAP_MS);
-    if (state.busy || cooled || sameAddr) return { allow: false, notice: notice() };
-    state.lastAt[key] = now;
-    if (chat) state.lastAt[chatKey] = now;
-    if (addrKey) state.addrAt[addrKey] = now;
-    if (globalAddr) state.addrAt[globalAddr] = now;
-    state.busy = true;
-    return { allow: true, notice: false };
-  }
-
-  function claimGmgnAddress(state, chain, address, now) {
-    var addr = String(address || '').trim();
-    if (!addr) return false;
-    var key = String(chain || '') + ':' + addr.toLowerCase();
-    var prev = state.gmgnAt[key] || 0;
-    if (prev && now - prev < USER_GAP_MS) return false;
-    state.gmgnAt[key] = now;
-    return true;
   }
 
   root.GmgnParse = {
@@ -1525,21 +1114,6 @@
     applyDetail: applyDetail,
     sampleAlert: sampleAlert,
     shouldSkipToken: shouldSkipToken,
-    athMcapFromInfo: athMcapFromInfo,
-    pnlMultiple: pnlMultiple,
-    pnlPercent: pnlPercent,
-    formatPnl: formatPnl,
-    backfillPnlRecords: backfillPnlRecords,
-    sentPnlEntries: sentPnlEntries,
-    mergePnlMap: mergePnlMap,
-    absorbLegacyAth: absorbLegacyAth,
-    mergePnlFromSources: mergePnlFromSources,
-    pnlRecords: pnlRecords,
-    pnlProgress: pnlProgress,
-    includeAthTarget: includeAthTarget,
-    athRefusal: athRefusal,
-    stopAfterAthRefusals: stopAfterAthRefusals,
-    pnlStatus: pnlStatus,
     dropAlertTranscript: dropAlertTranscript,
     parseSentCsv: parseSentCsv,
     sentKey: sentKey,
@@ -1547,12 +1121,5 @@
     formatSentCsv: formatSentCsv,
     mergeSentCsv: mergeSentCsv,
     sentSeedRows: sentSeedRows,
-    mergeDataFile: mergeDataFile,
-    unsentPoolRows: unsentPoolRows,
-    resumeMonitor: resumeMonitor,
-    emptyUserGuard: emptyUserGuard,
-    contractAddress: contractAddress,
-    admitUser: admitUser,
-    claimGmgnAddress: claimGmgnAddress,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
