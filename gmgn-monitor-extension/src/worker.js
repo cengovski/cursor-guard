@@ -864,6 +864,7 @@ async function onPortMessage(port, msg) {
   if (msg.type === 'TAB_BEGIN') {
     session.tab = msg.tab || '';
     session.chain = msg.chain || session.chain;
+    if (String(session.error || '').indexOf('Zaman filtresi bulunamadı') === 0) session.error = '';
     await saveSession(session);
     return;
   }

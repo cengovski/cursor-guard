@@ -204,7 +204,14 @@
         post({ type: 'PAGE_ERROR', scanId: scanId, message: '#MainDomId bulunamadı' });
         return;
       }
-      var tfBtn = pickVisible(main, '[data-testid="filter-tag-' + msg.timeframe + '"]');
+      var tfBtn = null;
+      var tfUntil = Date.now() + 8000;
+      while (!cancelled(myJob) && Date.now() < tfUntil) {
+        main = document.querySelector('#MainDomId');
+        tfBtn = main && pickVisible(main, '[data-testid="filter-tag-' + msg.timeframe + '"]');
+        if (tfBtn) break;
+        await sleep(250, myJob);
+      }
       if (tfBtn) {
         tfBtn.click();
         await sleep(400, myJob);

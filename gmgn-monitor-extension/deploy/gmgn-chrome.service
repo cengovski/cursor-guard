@@ -1,0 +1,18 @@
+[Unit]
+Description=GMGN Monitor Chrome
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Environment=DISPLAY=:99
+ExecStart=/opt/gmgn/gmgn-chrome.sh
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=25
+
+[Install]
+WantedBy=multi-user.target
