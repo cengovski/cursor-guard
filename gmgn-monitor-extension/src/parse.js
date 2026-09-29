@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  var CHAIN_ORDER = ['sol', 'bsc', 'robinhood', 'base', 'eth', 'arc'];
+  var CHAIN_ORDER = ['sol', 'bsc', 'robinhood', 'base', 'eth', 'arbitrum', 'stable', 'arc', 'xlayer', 'hyperevm', 'megaeth', 'monad', 'tron'];
   var TAB_ORDER = ['Track', 'Smart', 'KOL'];
   var DEX_CHAIN = {
     sol: 'solana',
@@ -569,12 +569,19 @@
   }
 
   var NETWORK_LABEL = {
-    sol: 'SOLANA',
-    bsc: 'BSC',
-    eth: 'ETHEREUM',
-    base: 'BASE',
-    robinhood: 'ROBINHOOD',
-    arc: 'ARC',
+    sol: '🟢 SOLANA',
+    bsc: '🟨 BSC',
+    eth: '💎 ETHEREUM',
+    base: '🔵 BASE',
+    robinhood: '🪶 ROBINHOOD',
+    arc: '🔵 ARC',
+    arbitrum: '🔷 ARBITRUM',
+    stable: '🟢 STABLE',
+    xlayer: '⬛ X LAYER',
+    hyperevm: '💧 HYPEREVM',
+    megaeth: '⚫ MEGAETH',
+    monad: '🟣 MONAD',
+    tron: '🔴 TRON',
   };
   var SOURCE_TABS = [
     ['KOL', 'KOL'],
